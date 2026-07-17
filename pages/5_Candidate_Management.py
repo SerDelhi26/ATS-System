@@ -1339,7 +1339,7 @@ with right_col:
     if st.session_state.resume_url:
 
         st.link_button(
-            "📄 Open Selected Resume",
+            "📄 Open Selected CV",
             st.session_state.resume_url,
             use_container_width=True
         )
@@ -1674,7 +1674,7 @@ with right_col:
             ):
 
                 if cols[8].button(
-                    "📄 Resume",
+                    "📄 CV",
                     key=f"view_{candidate['candidate_id']}"
                 ):
 
