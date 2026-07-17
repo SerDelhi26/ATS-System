@@ -4,6 +4,43 @@ from db import supabase
 import pandas as pd
 from theme import apply_theme
 
+def kpi_card(
+    title,
+    value,
+    color
+):
+
+    st.markdown(
+        f"""
+        <div style="
+        background:white;
+        padding:20px;
+        border-radius:12px;
+        text-align:center;
+        box-shadow:0px 2px 8px rgba(0,0,0,0.08);
+        border-left:6px solid {color};
+        ">
+
+        <div style="
+        color:#64748B;
+        font-size:16px;
+        ">
+        {title}
+        </div>
+
+        <div style="
+        color:{color};
+        font-size:34px;
+        font-weight:bold;
+        ">
+        {value}
+        </div>
+
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
 # ==========================
 # LOGIN CHECK
 # ==========================
@@ -229,47 +266,66 @@ joined_count = len(
 
 card1, card2, card3, card4 = st.columns(4)
 
+st.markdown("<div style='height:10px'></div>",
+unsafe_allow_html=True)
+
 card5, card6, card7, card8 = st.columns(4)
 
-card1.metric(
-    "Open Jobs",
-    open_jobs
-)
+with card1:
+    kpi_card(
+        "Open Jobs",
+        open_jobs,
+        "#2563EB"
+    )
 
-card2.metric(
-    "Candidates",
-    candidate_count
-)
+with card2:
+    kpi_card(
+        "Candidates",
+        candidate_count,
+        "#0891B2"
+    )
 
-card3.metric(
-    "Shortlisted",
-    shortlisted_count
-)
+with card3:
+    kpi_card(
+        "Shortlisted",
+        shortlisted_count,
+        "#8B5CF6"
+    )
 
-card4.metric(
-    "Interviews",
-    interview_count
-)
+with card4:
+    kpi_card(
+        "Interviews",
+        interview_count,
+        "#F59E0B"
+    )
 
-card5.metric(
-    "Selected",
-    selected_count
-)
+with card5:
+    kpi_card(
+        "Selected",
+        selected_count,
+        "#16A34A"
+    )
 
-card6.metric(
-    "Offers",
-    offer_count
-)
+with card6:
+    kpi_card(
+        "Offers",
+        offer_count,
+        "#0EA5E9"
+    )
 
-card7.metric(
-    "Joined",
-    joined_count
-)
+with card7:
+    kpi_card(
+        "Joined",
+        joined_count,
+        "#22C55E"
+    )
 
-card8.metric(
-    "Rejected",
-    rejected_count
-)
+with card8:
+    kpi_card(
+        "Rejected",
+        rejected_count,
+        "#DC2626"
+    )
 
 # ==========================
 # RECRUITER WORK SUMMARY
@@ -277,8 +333,8 @@ card8.metric(
 
 st.divider()
 
-st.subheader(
-    "Recruiter Work Summary"
+st.markdown(
+    "## 📊 Recruiter Work Summary"
 )
 
 summary_data = []
@@ -399,9 +455,10 @@ st.dataframe(
 
 st.divider()
 
-st.subheader(
-    "Candidate Pipeline"
+st.markdown(
+    "## 👤 Candidate Pipeline"
 )
+
 
 pipeline_col1, pipeline_col2, \
 pipeline_col3, pipeline_col4 = st.columns(4)
@@ -409,97 +466,125 @@ pipeline_col3, pipeline_col4 = st.columns(4)
 pipeline_col5, pipeline_col6, \
 pipeline_col7, pipeline_col8 = st.columns(4)
 
-pipeline_col1.metric(
-    "New",
-    len(
-        [
-            c
-            for c in candidates
-            if c.get("current_stage") == "New"
-        ]
-    )
+new_count = len(
+    [
+        c
+        for c in candidates
+        if c.get("current_stage") == "New"
+    ]
 )
 
-pipeline_col2.metric(
-    "Screening",
-    len(
-        [
-            c
-            for c in candidates
-            if c.get("current_stage") == "Screening"
-        ]
-    )
+screening_count = len(
+    [
+        c
+        for c in candidates
+        if c.get("current_stage") == "Screening"
+    ]
 )
 
-pipeline_col3.metric(
-    "Shortlisted",
-    len(
-        [
-            c
-            for c in candidates
-            if c.get("current_stage") == "Shortlisted"
-        ]
-    )
+shortlisted_pipeline_count = len(
+    [
+        c
+        for c in candidates
+        if c.get("current_stage") == "Shortlisted"
+    ]
 )
 
-pipeline_col4.metric(
-    "Interview",
-    len(
-        [
-            c
-            for c in candidates
-            if c.get("current_stage") == "Interview"
-        ]
-    )
+interview_pipeline_count = len(
+    [
+        c
+        for c in candidates
+        if c.get("current_stage") == "Interview"
+    ]
 )
 
-pipeline_col5.metric(
-    "Selected",
-    len(
-        [
-            c
-            for c in candidates
-            if c.get("current_stage") == "Selected"
-        ]
-    )
+selected_pipeline_count = len(
+    [
+        c
+        for c in candidates
+        if c.get("current_stage") == "Selected"
+    ]
 )
 
-
-pipeline_col6.metric(
-    "Offer",
-    len(
-        [
-            c
-            for c in candidates
-            if c.get("current_stage")
-            == "Offer"
-        ]
-    )
+offer_pipeline_count = len(
+    [
+        c
+        for c in candidates
+        if c.get("current_stage") == "Offer"
+    ]
 )
 
-pipeline_col7.metric(
-    "Joined",
-    len(
-        [
-            c
-            for c in candidates
-            if c.get("current_stage")
-            == "Joined"
-        ]
-    )
+joined_pipeline_count = len(
+    [
+        c
+        for c in candidates
+        if c.get("current_stage") == "Joined"
+    ]
 )
 
-pipeline_col8.metric(
-    "Rejected",
-    len(
-        [
-            c
-            for c in candidates
-            if c.get("current_stage")
-            == "Rejected"
-        ]
-    )
+rejected_pipeline_count = len(
+    [
+        c
+        for c in candidates
+        if c.get("current_stage") == "Rejected"
+    ]
 )
+
+with pipeline_col1:
+    kpi_card(
+        "New",
+        new_count,
+        "#2563EB"
+    )
+
+with pipeline_col2:
+    kpi_card(
+        "Screening",
+        screening_count,
+        "#F59E0B"
+    )
+
+with pipeline_col3:
+    kpi_card(
+        "Shortlisted",
+        shortlisted_pipeline_count,
+        "#8B5CF6"
+    )
+
+with pipeline_col4:
+    kpi_card(
+        "Interview",
+        interview_pipeline_count,
+        "#0EA5E9"
+    )
+
+with pipeline_col5:
+    kpi_card(
+        "Selected",
+        selected_pipeline_count,
+        "#16A34A"
+    )
+
+with pipeline_col6:
+    kpi_card(
+        "Offer",
+        offer_pipeline_count,
+        "#6366F1"
+    )
+
+with pipeline_col7:
+    kpi_card(
+        "Joined",
+        joined_pipeline_count,
+        "#22C55E"
+    )
+
+with pipeline_col8:
+    kpi_card(
+        "Rejected",
+        rejected_pipeline_count,
+        "#DC2626"
+    )
 
 # ==========================
 # JOB SUMMARY
@@ -507,8 +592,8 @@ pipeline_col8.metric(
 
 st.divider()
 
-st.subheader(
-    "Job Summary"
+st.markdown(
+    "## 💼 Job Summary"
 )
 
 job_summary = []
