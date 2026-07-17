@@ -2,7 +2,7 @@ import streamlit as st
 from db import supabase
 from common import show_logout
 from datetime import date
-
+from theme import apply_theme
 
 # ==========================
 # LOGIN CHECK
@@ -26,12 +26,18 @@ st.set_page_config(
     layout="wide"
 )
 
+apply_theme()
+
 with st.sidebar:
 
     show_logout()
 
 st.title(
     "ATS - Offer Management"
+)
+
+st.markdown(
+    "# 📄 ATS Offer Management"
 )
 
 # ==========================
@@ -265,10 +271,11 @@ left_col, right_col = st.columns(
 
 with left_col:
 
-    st.subheader(
-        "Edit Offer"
+    st.markdown(
+        "## ✏️ Edit Offer"
         if editing
-        else "Create Offer"
+        else
+        "## 📄 Create Offer"
     )
 
     candidates = get_candidates_for_offer()
@@ -362,6 +369,10 @@ with left_col:
         disabled=True
     )
 
+    st.markdown(
+        "### 💰 Compensation"
+    )
+
     offered_ctc = st.number_input(
         "Offered CTC *",
         min_value=0.0,
@@ -397,6 +408,10 @@ with left_col:
             in offer_status_options
             else 0
         )
+    )
+
+    st.markdown(
+        "### 📝 Offer Remarks"
     )
 
     remarks = st.text_area(
@@ -583,8 +598,8 @@ with left_col:
 
 with right_col:
 
-    st.subheader(
-        "Offer List"
+    st.markdown(
+        "## 📋 Offer Directory"
     )
 
     # --------------------------
@@ -627,10 +642,11 @@ with right_col:
     with filter_col2:
 
         search_text = st.text_input(
-            "Search Offer",
+            "🔍 Search Offer",
             placeholder=
-            "Candidate, CAN No, Job No"
+            "Candidate, CAN No or Job No"
         )
+
 
     # --------------------------
     # CANDIDATE LOOKUP
@@ -722,7 +738,7 @@ with right_col:
     if offers:
 
         header = st.columns(
-            [3, 3, 2, 2, 2, 1]
+            [3, 3, 2, 2, 3, 1]
         )
 
         header[0].markdown(
@@ -754,7 +770,7 @@ with right_col:
         for item in offers:
 
             cols = st.columns(
-                [3, 3, 2, 2, 2, 1]
+                [3, 3, 2, 2, 3, 1]
             )
 
             cols[0].write(
@@ -783,8 +799,37 @@ with right_col:
                 item["joining_date"]
             )
 
-            cols[4].write(
-                item["offer_status"]
+            status = item["offer_status"]
+
+            status_colors = {
+
+                "Offer Released": "#2563EB",
+                "Offer Accepted": "#16A34A",
+                "Offer Rejected": "#DC2626",
+                "Joined": "#22C55E",
+                "No Show": "#F59E0B"
+
+            }
+
+            color = status_colors.get(
+                status,
+                "#64748B"
+            )
+
+            cols[4].markdown(
+                f"""
+                <div style="
+                background:{color};
+                color:white;
+                padding:6px 12px;
+                border-radius:10px;
+                display:inline-block;
+                white-space:nowrap;
+                ">
+                {status}
+                </div>
+                """,
+                unsafe_allow_html=True
             )
 
             if cols[5].button(
