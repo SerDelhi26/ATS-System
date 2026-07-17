@@ -1,6 +1,7 @@
 import streamlit as st
 import bcrypt
 from db import supabase
+from theme import apply_theme
 
 if not st.session_state.get(
     "password_reset_mode",
@@ -16,7 +17,15 @@ st.set_page_config(
     layout="centered"
 )
 
-st.title("Change Password")
+apply_theme()
+
+st.markdown(
+    "# 🔑 Change Password"
+)
+
+st.info(
+    "Enter your current password and choose a new password."
+)
 
 email = st.text_input("Email")
 
@@ -35,7 +44,13 @@ confirm_password = st.text_input(
     type="password"
 )
 
-if st.button("Change Password"):
+change_password = st.button(
+    "🔑 Change Password",
+    use_container_width=True
+)
+
+if change_password:
+
 
     response = (
         supabase
@@ -83,6 +98,12 @@ if st.button("Change Password"):
                 "New password cannot be blank."
             )
 
+        elif len(new_password) < 8:
+
+            st.error(
+                "Password must contain at least 8 characters."
+            )
+
         else:
 
             hashed_password = (
@@ -114,7 +135,12 @@ if st.button("Change Password"):
             )
             st.session_state.password_reset_mode = False
 
-if st.button("Back to Login"):
+back_to_login = st.button(
+    "↩ Back to Login",
+    use_container_width=True
+)
+
+if back_to_login:
 
     st.session_state.password_reset_mode = False
 
