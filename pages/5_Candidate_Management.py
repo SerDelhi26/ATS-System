@@ -3,7 +3,7 @@ import re
 from datetime import datetime
 from db import supabase
 from common import show_logout
-
+from theme import apply_theme
 
 # ==========================
 # LOGIN CHECK
@@ -28,12 +28,14 @@ st.set_page_config(
     layout="wide"
 )
 
+apply_theme()
+
 with st.sidebar:
 
     show_logout()
 
-st.title(
-    "ATS - Candidate Management"
+st.markdown(
+    "# 👤 ATS Candidate Management"
 )
 
 
@@ -271,12 +273,13 @@ left_col, right_col = st.columns([1, 3])
 
 with left_col:
 
-    st.subheader(
-        "Edit Candidate"
+    st.markdown(
+        "## ✏️ Edit Candidate"
         if editing
         else
-        "Candidate Entry"
+        "## ➕ Candidate Entry"
     )
+
 
     jobs = get_jobs_for_user(
         st.session_state.user_id,
@@ -466,6 +469,10 @@ with left_col:
             key=f"experience_months_{st.session_state.candidate_form_reset}"
         )
 
+    st.markdown(
+        "### 🎓 Education"
+    )
+
     qualification = st.text_input(
         "Highest Qualification *",
         value=
@@ -482,6 +489,10 @@ with left_col:
         if editing
         else "",
         key=f"education_details_{st.session_state.candidate_form_reset}"
+    )
+
+    st.markdown(
+        "### 💼 Employment"
     )
 
     current_company = st.text_input(
@@ -585,6 +596,10 @@ with left_col:
             key=f"notice_negotiable_{st.session_state.candidate_form_reset}"
         )
 
+    st.markdown(
+        "### 🛠 Skills & Resume"
+    )
+    
     skills = st.text_area(
         "Skills *",
         value=
@@ -1301,8 +1316,8 @@ with left_col:
 
 with right_col:
 
-    st.subheader(
-        "Candidate List"
+    st.markdown(
+        "## 📋 Candidate Directory"
     )
     
     filter_col1, filter_col2, filter_col3 = st.columns(3)
@@ -1330,8 +1345,9 @@ with right_col:
         )
 
     search_text = st.text_input(
-        "Search Candidate",
-        placeholder="Search by CAN Number, Name, Email, Mobile, Company"
+        "🔍 Search Candidate",
+        placeholder=
+        "CAN No, Name, Email, Mobile or Company"
     )
 
     job_filter_options = [
@@ -1607,12 +1623,40 @@ with right_col:
                 experience
             )
 
-            cols[6].write(
-                candidate.get(
-                    "candidate_status",
-                    ""
-                )
+            status = candidate.get(
+                "candidate_status",
+                ""
             )
+
+            status_colors = {
+
+                "New": "#2563EB",
+                "Screening": "#F59E0B",
+                "Shortlisted": "#8B5CF6",
+                "Hold": "#EAB308",
+                "Rejected": "#DC2626"
+
+            }
+
+            color = status_colors.get(
+                status,
+                "#64748B"
+            )
+
+            cols[6].markdown(
+                f"""
+                <span style="
+                background:{color};
+                color:white;
+                padding:4px 10px;
+                border-radius:10px;
+                ">
+                {status}
+                </span>
+                """,
+                unsafe_allow_html=True
+            )
+
 
             cols[7].write(
                 candidate.get(
@@ -1626,7 +1670,7 @@ with right_col:
             ):
 
                 if cols[8].button(
-                    "📄 View",
+                    "📄 Resume",
                     key=f"view_{candidate['candidate_id']}"
                 ):
 
