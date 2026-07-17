@@ -5,14 +5,6 @@ def apply_theme():
     st.markdown("""
     <style>
 
-    .main {
-        background-color: #F8FAFC;
-    }
-
-    h1, h2, h3 {
-        color: #1F4E79;
-    }
-
     div.stButton > button {
         background-color: #1F4E79;
         color: white;
@@ -23,10 +15,6 @@ def apply_theme():
     div.stButton > button:hover {
         background-color: #2563EB;
         color: white;
-    }
-
-    [data-testid="stSidebar"] {
-        background-color: #FFFFFF;
     }
 
     </style>
