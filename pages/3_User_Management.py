@@ -5,7 +5,7 @@ from db import supabase
 from datetime import date
 from common import show_logout
 import bcrypt
-
+from theme import apply_theme
 
 # ==========================
 # LOGIN CHECK
@@ -39,6 +39,8 @@ st.set_page_config(
     layout="wide"
 )
 
+apply_theme()
+
 if "edit_user_id" not in st.session_state:
     st.session_state.edit_user_id = None
 
@@ -49,7 +51,9 @@ with st.sidebar:
 
     show_logout()
 
-st.title("ATS - User Management")
+st.markdown(
+    "# 👥 ATS User Management"
+)
 
 if st.session_state.get("reset_user_id"):
 
@@ -157,6 +161,16 @@ if st.session_state.edit_user_id:
 # ==============================
 
 left_col, right_col = st.columns([1, 3])
+
+st.markdown("""
+<div style="
+background:white;
+padding:15px;
+border-radius:12px;
+box-shadow:0px 2px 8px rgba(0,0,0,0.08);
+">
+""",
+unsafe_allow_html=True)
 
 # ==============================
 # LEFT PANEL
@@ -451,16 +465,24 @@ with left_col:
 
                     st.error(str(e))
 
+st.markdown(
+    "</div>",
+    unsafe_allow_html=True
+)
+
 # ==============================
 # RIGHT PANEL
 # ==============================
 
 with right_col:
 
-    st.subheader("Employee List")
+    st.markdown(
+        "## 📋 Employee Directory"
+    )
 
     search_text = st.text_input(
-        "Search Employee"
+        "🔍 Search Employee",
+        placeholder="Search by employee name..."
     )
 
     col1, col2 = st.columns(2)
@@ -567,9 +589,39 @@ with right_col:
                     row["role"]
                 )
 
-                cols[4].write(
-                    row["status"]
-                )
+                status = row["status"]
+
+                if status == "Active":
+
+                    cols[4].markdown(
+                        """
+                        <span style="
+                        background:#16A34A;
+                        color:white;
+                        padding:4px 10px;
+                        border-radius:10px;
+                        ">
+                        Active
+                        </span>
+                        """,
+                        unsafe_allow_html=True
+                    )
+
+                else:
+
+                    cols[4].markdown(
+                        """
+                        <span style="
+                        background:#DC2626;
+                        color:white;
+                        padding:4px 10px;
+                        border-radius:10px;
+                        ">
+                        Inactive
+                        </span>
+                        """,
+                        unsafe_allow_html=True
+                    )
 
 
                 # Edit Button
