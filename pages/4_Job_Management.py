@@ -3,6 +3,7 @@ import pandas as pd
 from db import supabase
 from datetime import datetime
 from common import show_logout
+from theme import apply_theme
 
 
 # ==========================
@@ -37,11 +38,16 @@ st.set_page_config(
     layout="wide"
 )
 
+apply_theme()
+
 with st.sidebar:
 
     show_logout()
 
-st.title("ATS - Job Management")
+st.markdown(
+    "# 💼 ATS Job Management"
+)
+
 
 if "success_message" not in st.session_state:
     st.session_state.success_message = None
@@ -572,7 +578,9 @@ with left_col:
         else "location_new"
     )
 
-    st.subheader("Experience")
+    st.markdown(
+        "### 🎓 Experience"
+    )
 
     min_year = st.selectbox(
         "Minimum Year",
@@ -664,7 +672,9 @@ with left_col:
     # Compensation
     # -----------------------------
 
-    st.subheader("Compensation")
+    st.markdown(
+        "### 💰 Compensation"
+    )
 
     pay_min = st.number_input(
         "Pay Min",
@@ -749,7 +759,9 @@ with left_col:
     # Skills & JD
     # -----------------------------
 
-    st.subheader("Job Details")
+    st.markdown(
+        "### 📝 Job Details"
+    )
 
     skills_required = st.text_area(
         "Skills Required",
@@ -791,7 +803,9 @@ with left_col:
     # Invoice Information
     # -----------------------------
 
-    st.subheader("Invoice Information")
+    st.markdown(
+        "### 🧾 Invoice Information"
+    )
 
     performa_invoice_no = st.text_input(
         "Performa Invoice No",
@@ -1292,7 +1306,9 @@ with left_col:
 
 with right_col:
 
-    st.subheader("Job List")
+    st.markdown(
+        "## 📋 Job Directory"
+    )
 
     if st.session_state.job_document_url:
 
@@ -1323,8 +1339,9 @@ with right_col:
     }
 
     search_text = st.text_input(
-        "Search Job",
-        placeholder="Search by JR Number, Job Title, Company, Location"
+        "🔍 Search Job",
+        placeholder=
+        "JR Number, Job Title, Company or Location"
     )
 
     filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
@@ -1596,9 +1613,71 @@ with right_col:
                 row["openings"]
             )
 
-            cols[6].write(
-                row["job_status"]
-            )
+            job_status = row["job_status"]
+
+            if job_status == "Open":
+
+                cols[6].markdown(
+                    """
+                    <span style="
+                    background:#16A34A;
+                    color:white;
+                    padding:4px 10px;
+                    border-radius:10px;
+                    ">
+                    Open
+                    </span>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+            elif job_status == "Closed":
+
+                cols[6].markdown(
+                    """
+                    <span style="
+                    background:#DC2626;
+                    color:white;
+                    padding:4px 10px;
+                    border-radius:10px;
+                    ">
+                    Closed
+                    </span>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+            elif job_status == "On Hold":
+
+                cols[6].markdown(
+                    """
+                    <span style="
+                    background:#F59E0B;
+                    color:white;
+                    padding:4px 10px;
+                    border-radius:10px;
+                    ">
+                    On Hold
+                    </span>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+            else:
+
+                cols[6].markdown(
+                    """
+                    <span style="
+                    background:#64748B;
+                    color:white;
+                    padding:4px 10px;
+                    border-radius:10px;
+                    ">
+                    Cancelled
+                    </span>
+                    """,
+                    unsafe_allow_html=True
+                )
 
             if row["job_document_path"]:
 
