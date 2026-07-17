@@ -2,7 +2,7 @@ import streamlit as st
 from db import supabase
 from common import show_logout
 from datetime import date
-
+from theme import apply_theme
 
 # ==========================
 # LOGIN CHECK
@@ -27,14 +27,15 @@ st.set_page_config(
     layout="wide"
 )
 
+apply_theme()
+
 with st.sidebar:
 
     show_logout()
 
-st.title(
-    "ATS - Interview Management"
+st.markdown(
+    "# 📅 ATS Interview Management"
 )
-
 
 # ==========================
 # FUNCTIONS
@@ -295,10 +296,11 @@ left_col, right_col = st.columns(
 
 with left_col:
 
-    st.subheader(
-        "Edit Interview"
+    st.markdown(
+        "## ✏️ Edit Interview"
         if editing
-        else "Schedule Interview"
+        else
+        "## 📅 Schedule Interview"
     )
 
     candidates = get_candidates_for_interview()
@@ -390,6 +392,10 @@ with left_col:
         "Job",
         value=selected_job_display,
         disabled=True
+    )
+
+    st.markdown(
+        "### 🎯 Interview Details"
     )
 
     interview_round = st.text_input(
@@ -501,6 +507,10 @@ with left_col:
             in interview_status_options
             else 0
         )
+    )
+
+    st.markdown(
+        "### 📝 Feedback & Remarks"
     )
 
     feedback = st.text_area(
@@ -719,8 +729,8 @@ with left_col:
 
 with right_col:
 
-    st.subheader(
-        "Interview List"
+    st.markdown(
+        "## 📋 Interview Directory"
     )
 
     # --------------------------
@@ -775,9 +785,9 @@ with right_col:
         )
 
     search_text = st.text_input(
-        "Search Interview",
+        "🔍 Search Interview",
         placeholder=
-        "Candidate, CAN No, Job No, Interviewer"
+        "Candidate, CAN No, Job No or Interviewer"
     )
 
     # --------------------------
@@ -894,7 +904,7 @@ with right_col:
     if interviews:
 
         header = st.columns(
-            [3, 3, 2, 2, 2, 2, 1]
+            [3, 3, 2, 2, 2, 3, 1]
         )
 
         header[0].markdown(
@@ -930,7 +940,7 @@ with right_col:
         for item in interviews:
 
             cols = st.columns(
-                [3, 3, 2, 2, 2, 2, 1]
+                [3, 3, 2, 2, 2, 3, 1]
             )
 
             cols[0].write(
@@ -965,8 +975,38 @@ with right_col:
                 else "-"
             )
 
-            cols[5].write(
-                item["interview_status"]
+            status = item["interview_status"]
+
+            status_colors = {
+
+                "Scheduled": "#2563EB",
+                "Completed": "#16A34A",
+                "Rescheduled": "#F59E0B",
+                "On Hold": "#EAB308",
+                "Selected": "#22C55E",
+                "Rejected": "#DC2626"
+
+            }
+
+            color = status_colors.get(
+                status,
+                "#64748B"
+            )
+
+            cols[5].markdown(
+                f"""
+                <div style="
+                background:{color};
+                color:white;
+                padding:6px 12px;
+                border-radius:10px;
+                display:inline-block;
+                white-space:nowrap;
+                ">
+                {status}
+                </div>
+                """,
+                unsafe_allow_html=True
             )
 
             if cols[6].button(
