@@ -599,7 +599,7 @@ with left_col:
     st.markdown(
         "### 🛠 Skills & Resume"
     )
-    
+
     skills = st.text_area(
         "Skills *",
         value=
@@ -1527,7 +1527,7 @@ with right_col:
     if candidates:
 
         headers = st.columns(
-            [2,3,3,2,2,2,2,2,2,2]
+            [2,3,3,2,2,2,3,2,2,2]
         )
 
         headers[0].markdown(
@@ -1574,7 +1574,7 @@ with right_col:
         for candidate in candidates:
 
             cols = st.columns(
-                [2,3,2,2,2,2,2,2,2,2]
+                [2,3,2,2,2,2,3,2,2,2]
             )
 
             full_name = (
@@ -1645,14 +1645,18 @@ with right_col:
 
             cols[6].markdown(
                 f"""
-                <span style="
+                <div style="
                 background:{color};
                 color:white;
-                padding:4px 10px;
-                border-radius:10px;
+                padding:6px 12px;
+                border-radius:12px;
+                text-align:center;
+                font-size:14px;
+                white-space:nowrap;
+                display:inline-block;
                 ">
                 {status}
-                </span>
+                </div>
                 """,
                 unsafe_allow_html=True
             )
