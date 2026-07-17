@@ -2,7 +2,7 @@ import streamlit as st
 from common import show_logout
 from db import supabase
 import pandas as pd
-
+from theme import apply_theme
 
 # ==========================
 # LOGIN CHECK
@@ -23,6 +23,7 @@ st.set_page_config(
     page_title="ATS Dashboard",
     layout="wide"
 )
+apply_theme()
 
 with st.sidebar:
 
