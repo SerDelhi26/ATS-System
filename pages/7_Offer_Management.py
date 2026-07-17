@@ -32,10 +32,6 @@ with st.sidebar:
 
     show_logout()
 
-st.title(
-    "ATS - Offer Management"
-)
-
 st.markdown(
     "# 📄 ATS Offer Management"
 )
