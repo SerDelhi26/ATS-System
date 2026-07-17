@@ -66,7 +66,9 @@ with st.sidebar:
 
     show_logout()
 
-st.title("ATS Dashboard")
+st.markdown(
+    "# 🚀 ATS Dashboard"
+)
 
 st.caption(
     f"Logged in as "
