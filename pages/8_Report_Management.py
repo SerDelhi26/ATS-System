@@ -4,6 +4,7 @@ from io import BytesIO
 from datetime import date
 from db import supabase
 from common import show_logout
+from theme import apply_theme
 
 # ==========================
 # LOGIN CHECK
@@ -25,11 +26,15 @@ st.set_page_config(
     layout="wide"
 )
 
+apply_theme()
+
 with st.sidebar:
 
     show_logout()
 
-st.title("ATS Master Report")
+st.markdown(
+    "# 📊 ATS Master Report"
+)
 
 # ==========================
 # LOAD DATA
@@ -194,35 +199,35 @@ col1, col2, col3, col4, col5 = st.columns(5)
 with col1:
 
     recruiter_filter = st.selectbox(
-        "Recruiter",
+        "👤 Recruiter",
         recruiter_options
     )
 
 with col2:
 
     from_date = st.date_input(
-        "From Date",
+        "📅 From Date",
         value=date.today().replace(day=1)
     )
 
 with col3:
 
     to_date = st.date_input(
-        "To Date",
+        "📅 To Date",
         value=date.today()
     )
 
 with col4:
 
     status_filter = st.selectbox(
-        "Candidate Status",
+        "📌 Candidate Status",
         status_options
     )
 
 with col5:
 
     job_filter = st.selectbox(
-        "Job",
+        "💼 Job",
         job_options
     )
 
@@ -395,8 +400,8 @@ report_df = pd.DataFrame(
     report_rows
 )
 
-st.write(
-    f"Total Records : {len(report_df)}"
+st.info(
+    f"📋 Total Records Found : {len(report_df)}"
 )
 
 # ==========================
@@ -418,7 +423,11 @@ with pd.ExcelWriter(
 
 excel_data = output.getvalue()
 
-st.download_button(
+download_col1, download_col2 = st.columns([1,5])
+
+with download_col1:
+
+    st.download_button(
 
     "📥 Download Excel",
 
@@ -434,6 +443,9 @@ st.download_button(
 # ==========================
 # REPORT TABLE
 # ==========================
+st.markdown(
+    "## 📋 Report Results"
+)
 
 st.dataframe(
 
