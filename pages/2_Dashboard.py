@@ -465,6 +465,11 @@ st.markdown(
 pipeline_col1, pipeline_col2, \
 pipeline_col3, pipeline_col4 = st.columns(4)
 
+st.markdown(
+    "<div style='height:15px'></div>",
+    unsafe_allow_html=True
+)
+
 pipeline_col5, pipeline_col6, \
 pipeline_col7, pipeline_col8 = st.columns(4)
 
