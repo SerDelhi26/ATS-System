@@ -41,6 +41,14 @@ st.set_page_config(
 
 apply_theme()
 
+st.markdown("""
+<style>
+.block-container {
+    max-width: 100%;
+}
+</style>
+""", unsafe_allow_html=True)
+
 if "edit_user_id" not in st.session_state:
     st.session_state.edit_user_id = None
 
