@@ -130,7 +130,6 @@ def get_document_url(file_path):
 
         return None
 
-
 def upload_job_document(
     uploaded_file,
     file_name
@@ -321,6 +320,9 @@ with left_col:
                     })
                     .execute()
                 )
+                
+                # Performance Fix 1: Specific cache clear to ensure new items show immediately
+                get_job_titles.clear()
 
                 st.success(
                     "Job Title created."
@@ -400,6 +402,9 @@ with left_col:
                     })
                     .execute()
                 )
+                
+                # Performance Fix 1: Specific cache clear to ensure new items show immediately
+                get_companies.clear()
 
                 st.success(
                     "Company created."
@@ -479,6 +484,9 @@ with left_col:
                     })
                     .execute()
                 )
+                
+                # Performance Fix 1: Specific cache clear to ensure new items show immediately
+                get_categories.clear()
 
                 st.success(
                     "Category created."
@@ -1396,6 +1404,7 @@ with right_col:
 
     assignments_data = assignments.data
 
+    # Performance Fix 2: Added .limit(500) and order desc to prevent DB query overload
     jobs = (
         supabase
         .table("job_management")
@@ -1412,7 +1421,8 @@ with right_col:
             job_document_path
             """
         )
-        .order("job_id")
+        .order("job_id", desc=True)
+        .limit(500) 
         .execute()
     )
 
@@ -1544,6 +1554,13 @@ with right_col:
 
     if not jobs_df.empty:
 
+        # Performance Fix 3: Slicing DataFrame to limit UI rendering to 25 rows max
+        total_jobs = len(jobs_df)
+        display_jobs_df = jobs_df.head(25)
+        
+        if total_jobs > 25:
+            st.caption(f"⚠️ Showing top 25 of {total_jobs} results to maintain performance. Use the search bar to find specific records.")
+
         header = st.columns(
             [2, 3, 3, 3, 2, 2, 2, 2.5, 1.5, 1.5]
         )
@@ -1561,7 +1578,8 @@ with right_col:
 
         st.divider()
 
-        for _, row in jobs_df.iterrows():
+        # Render only the limited DataFrame rows
+        for _, row in display_jobs_df.iterrows():
 
             cols = st.columns(
                 [2, 3, 3, 3, 2, 2, 2, 2.5, 1.5, 1.5]

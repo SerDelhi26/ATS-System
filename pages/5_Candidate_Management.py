@@ -1408,6 +1408,7 @@ with right_col:
                 recruiter_options
             )
 
+    # Performance Fix 1: Limit the database query to 500 records to prevent RAM overload
     result = (
         supabase
         .table("candidate_management")
@@ -1434,6 +1435,7 @@ with right_col:
             "candidate_id",
             desc=True
         )
+        .limit(500)
         .execute()
     )
 
@@ -1526,6 +1528,11 @@ with right_col:
 
     if candidates:
 
+        # Performance Fix 2: Limit UI rendering to 25 items to stop Streamlit from freezing
+        display_candidates = candidates[:25]
+        if len(candidates) > 25:
+            st.caption(f"⚠️ Showing top 25 of {len(candidates)} results to maintain performance. Use the search bar to find specific records.")
+
         headers = st.columns(
             [2,3,3,2,2,2,3,2,2,2]
         )
@@ -1571,7 +1578,8 @@ with right_col:
 
         st.divider()
 
-        for candidate in candidates:
+        # Iterate over the sliced list instead of the full list
+        for candidate in display_candidates:
 
             cols = st.columns(
                 [2,3,2,2,2,2,3,2,2,2]

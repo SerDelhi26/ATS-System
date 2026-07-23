@@ -116,7 +116,6 @@ def get_candidate_lookup():
         .data
     )
 
-
 def update_candidate_stage(
     candidate_id,
     offer_status
@@ -548,7 +547,8 @@ with left_col:
                         offer_status
                     )
 
-                    st.cache_data.clear()
+                    # Performance Fix 1: Specific cache clear instead of global clear
+                    get_candidates_for_offer.clear()
 
                     st.success(
                         "Offer Updated Successfully."
@@ -574,7 +574,8 @@ with left_col:
                         offer_status
                     )
 
-                    st.cache_data.clear()
+                    # Performance Fix 1: Specific cache clear instead of global clear
+                    get_candidates_for_offer.clear()
 
                     st.success(
                         "Offer Saved Successfully."
@@ -587,7 +588,7 @@ with left_col:
                 st.error(
                     str(e)
                 )
-    
+
 # ==========================
 # RIGHT PANEL
 # ==========================
@@ -602,6 +603,7 @@ with right_col:
     # OFFER DATA
     # --------------------------
 
+    # Performance Fix 2: Limit the database query to 500 records to prevent RAM overload
     result = (
         supabase
         .table("offer_management")
@@ -610,6 +612,7 @@ with right_col:
             "offer_id",
             desc=True
         )
+        .limit(500)
         .execute()
     )
 
@@ -732,6 +735,12 @@ with right_col:
     # --------------------------
 
     if offers:
+        
+        # Performance Fix 3: Limit UI rendering to 25 items to stop Streamlit from freezing
+        display_offers = offers[:25]
+        if len(offers) > 25:
+            st.caption(f"⚠️ Showing top 25 of {len(offers)} results to maintain performance. Use the search bar to find specific records.")
+
 
         header = st.columns(
             [3, 3, 2, 2, 3, 1]
@@ -763,7 +772,8 @@ with right_col:
 
         st.divider()
 
-        for item in offers:
+        # Iterate over the sliced list (display_offers) instead of the full list
+        for item in display_offers:
 
             cols = st.columns(
                 [3, 3, 2, 2, 3, 1]

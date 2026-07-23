@@ -684,7 +684,8 @@ with left_col:
                         interview_status
                     )
 
-                    st.cache_data.clear()
+                    # Performance Fix 1: Specific cache clear instead of global clear
+                    get_candidates_for_interview.clear()
 
                     st.success(
                         "Interview Updated Successfully."
@@ -710,7 +711,8 @@ with left_col:
                         interview_status
                     )
 
-                    st.cache_data.clear()
+                    # Performance Fix 1: Specific cache clear instead of global clear
+                    get_candidates_for_interview.clear()
 
                     st.success(
                         "Interview Scheduled Successfully."
@@ -737,6 +739,7 @@ with right_col:
     # INTERVIEW DATA
     # --------------------------
 
+    # Performance Fix 2: Limit the database query to 500 records to prevent RAM overload
     result = (
         supabase
         .table("interview_management")
@@ -745,6 +748,7 @@ with right_col:
             "interview_id",
             desc=True
         )
+        .limit(500)
         .execute()
     )
 
@@ -903,6 +907,11 @@ with right_col:
 
     if interviews:
 
+        # Performance Fix 3: Limit UI rendering to 25 items to stop Streamlit from freezing
+        display_interviews = interviews[:25]
+        if len(interviews) > 25:
+            st.caption(f"⚠️ Showing top 25 of {len(interviews)} results to maintain performance. Use the search bar to find specific records.")
+
         header = st.columns(
             [3, 3, 2, 2, 2, 3, 1]
         )
@@ -937,7 +946,8 @@ with right_col:
 
         st.divider()
 
-        for item in interviews:
+        # Iterate over the sliced list instead of the full list
+        for item in display_interviews:
 
             cols = st.columns(
                 [3, 3, 2, 2, 2, 3, 1]
