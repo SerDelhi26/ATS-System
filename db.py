@@ -8,13 +8,13 @@ load_dotenv()
 SUPABASE_URL = (
     st.secrets["SUPABASE_URL"]
     if "SUPABASE_URL" in st.secrets
-    else os.getenv("SUPABASE_URL")
+    else os.getenv("SUPABASE_URL", "https://placeholder-url.supabase.co")
 )
 
 SUPABASE_KEY = (
     st.secrets["SUPABASE_KEY"]
     if "SUPABASE_KEY" in st.secrets
-    else os.getenv("SUPABASE_KEY")
+    else os.getenv("SUPABASE_KEY", "placeholder-key")
 )
 
 supabase = create_client(
