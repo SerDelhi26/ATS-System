@@ -31,42 +31,43 @@ with st.sidebar:
 st.markdown("# 📊 ATS Master Report")
 
 # ==========================
-# FUNCTIONS (CACHED)
+# FUNCTIONS
 # ==========================
-# We use a short TTL so reports are relatively fresh, but won't crash the DB if 5 recruiters pull reports at once.
 @st.cache_data(ttl=60)
 def get_report_data():
     try:
         candidates = supabase.table("candidate_management").select("*").execute().data
         jobs = supabase.table("job_management").select("job_id, job_reference_no, job_title_id").execute().data
         job_titles = supabase.table("job_title_master").select("*").execute().data
-        
-        # We don't necessarily need the full interview/offer tables for the master report 
-        # since candidate_management already holds the 'current_stage'. 
-        # But if you need specific offer CTCs in the report, we fetch them here.
         offers = supabase.table("offer_management").select("candidate_id, offered_ctc").execute().data
         
         return candidates, jobs, job_titles, offers
     except Exception as e:
-        st.error(f"Error loading report data : {e}")
-        st.stop()
+        st.error(f"Error loading report data: {e}")
+        return [], [], [], []
 
 def parse_date(date_str):
     """Safely converts Supabase timestamps to clean YYYY-MM-DD format."""
     if not date_str:
-        return ""
+        return None
     try:
-        # Supabase format: '2026-07-24T10:15:30.123Z' or similar
+        # Supabase format: '2026-07-24T10:15:30.123Z'
         clean_time = str(date_str).split(".")[0].split("+")[0].replace("Z", "")
         parsed = datetime.strptime(clean_time, "%Y-%m-%dT%H:%M:%S")
         return parsed.date()
     except:
-        return ""
+        return None
 
 # ==========================
 # LOAD DATA
 # ==========================
 candidates, jobs, job_titles, offers = get_report_data()
+
+# Show total records in DB for debugging
+if candidates:
+    st.caption(f"Total candidates in database: {len(candidates)}")
+else:
+    st.warning("No candidate data found in the database. Please check your Supabase connection.")
 
 # ==========================
 # LOOKUPS
@@ -81,7 +82,6 @@ for job in jobs:
     job_lookup[job["job_id"]] = label
     job_options.append(label)
 
-# If you want to include Offered CTC in the master report
 offer_lookup = {row["candidate_id"]: row.get("offered_ctc", "") for row in offers}
 
 # ==========================
@@ -89,7 +89,7 @@ offer_lookup = {row["candidate_id"]: row.get("offered_ctc", "") for row in offer
 # ==========================
 st.markdown("### 🔍 Filter Criteria")
 
-col1, col2, col3, col4, col5 = st.columns(5)
+col1, col2, col3, col4, col5, col6 = st.columns([2, 2, 2, 2, 2, 1])
 
 recruiter_options = ["All Recruiters"]
 recruiter_options.extend(
@@ -101,14 +101,16 @@ status_options = [
 ]
 
 with col1:
-    from_date = st.date_input("📅 From Date", value=date.today().replace(day=1))
+    use_date_filter = st.checkbox("📅 Enable Date Filter", value=True)
 with col2:
-    to_date = st.date_input("📅 To Date", value=date.today())
+    from_date = st.date_input("From Date", value=date(2026, 1, 1), disabled=not use_date_filter)
 with col3:
-    recruiter_filter = st.selectbox("👤 Recruiter", recruiter_options)
+    to_date = st.date_input("To Date", value=date.today(), disabled=not use_date_filter)
 with col4:
-    status_filter = st.selectbox("📌 Master Stage", status_options)
+    recruiter_filter = st.selectbox("👤 Recruiter", recruiter_options)
 with col5:
+    status_filter = st.selectbox("📌 Stage", status_options)
+with col6:
     job_filter = st.selectbox("💼 Job", job_options)
 
 st.divider()
@@ -120,35 +122,31 @@ report_rows = []
 
 for candidate in candidates:
     
-    # 1. Parse the created date for accurate filtering
-    raw_date = candidate.get("created_at", "")
-    parsed_date = parse_date(raw_date)
+    # 1. Parse Date
+    parsed_date = parse_date(candidate.get("created_at", ""))
     
-    # Skip if we couldn't parse the date (failsafe)
-    if not parsed_date:
-        continue
+    # Date Filtering Logic
+    if use_date_filter:
+        if not parsed_date or parsed_date < from_date or parsed_date > to_date:
+            continue
 
-    # 2. DATE FILTER LOGIC (Fixed!)
-    if parsed_date < from_date or parsed_date > to_date:
-        continue
-
-    # 3. RECRUITER FILTER
+    # 2. Recruiter Filter
     if recruiter_filter != "All Recruiters" and candidate.get("created_by_name") != recruiter_filter:
         continue
 
-    # 4. STATUS FILTER (Using current_stage instead of just candidate_status)
+    # 3. Status Filter
     master_stage = candidate.get("current_stage", "Unknown")
     if status_filter != "All Stages" and master_stage != status_filter:
         continue
 
-    # 5. JOB FILTER
+    # 4. Job Filter
     job_label = job_lookup.get(candidate.get("job_id"), "Unknown Job")
     if job_filter != "All Jobs" and job_label != job_filter:
         continue
 
-    # Build the flat row for Excel/Dataframe
+    # Build the row
     row = {
-        "Date Added": parsed_date.strftime("%Y-%m-%d"),
+        "Date Added": parsed_date.strftime("%Y-%m-%d") if parsed_date else "N/A",
         "Candidate No": candidate.get("candidate_reference_no", ""),
         "Candidate Name": f"{candidate.get('first_name','')} {candidate.get('last_name','')}".strip(),
         "Job": job_label,
@@ -156,11 +154,6 @@ for candidate in candidates:
         "Email": candidate.get("email", ""),
         "Mobile": candidate.get("mobile_no", ""),
         "Experience": f"{candidate.get('experience_years',0)}Y {candidate.get('experience_months',0)}M",
-        "Current Company": candidate.get("current_company", ""),
-        "Current Designation": candidate.get("current_designation", ""),
-        "Current CTC": float(candidate.get("current_ctc", 0.0)),
-        "Expected CTC": float(candidate.get("expected_ctc", 0.0)),
-        "Offered CTC": float(offer_lookup.get(candidate.get("candidate_id"), 0.0)),
         "Master Stage": master_stage
     }
     report_rows.append(row)
@@ -176,14 +169,12 @@ with colA:
 
 with colB:
     if not report_df.empty:
-        # Generate Excel in memory
         output = BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
             report_df.to_excel(writer, index=False, sheet_name="ATS Report")
         excel_data = output.getvalue()
         
-        # Add a bit of top margin so the button aligns nicely with the metric
-        st.markdown("<div style='margin-top: 15px;'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='margin-top: 25px;'></div>", unsafe_allow_html=True)
         st.download_button(
             label="📥 Download Excel Report",
             data=excel_data,
@@ -192,26 +183,13 @@ with colB:
             type="primary"
         )
 
-
 st.markdown("### 📋 Report Preview")
 
 if not report_df.empty:
-    # Use st.dataframe with Column Configuration for a beautiful UI
     st.dataframe(
         report_df,
         use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Date Added": st.column_config.DateColumn("Date", format="YYYY-MM-DD"),
-            "Candidate No": st.column_config.TextColumn("CAN No"),
-            "Candidate Name": st.column_config.TextColumn("Name"),
-            "Job": st.column_config.TextColumn("Job Applied", width="medium"),
-            "Email": st.column_config.TextColumn("Email", width="medium"),
-            "Current CTC": st.column_config.NumberColumn("Current CTC", format="%.2f"),
-            "Expected CTC": st.column_config.NumberColumn("Expected CTC", format="%.2f"),
-            "Offered CTC": st.column_config.NumberColumn("Offered CTC", format="%.2f"),
-            "Master Stage": st.column_config.TextColumn("Stage")
-        }
+        hide_index=True
     )
 else:
     st.warning("No records found for the selected filters.")
