@@ -12,10 +12,10 @@ def show_user_profile():
             st.markdown("---")
 
 def show_logout():
-    """Renders the standard logout button in the sidebar."""
+    """Renders the standard logout button in the sidebar and safely returns to login."""
     if st.button("🚪 Logout", use_container_width=True):
         st.session_state.clear()
-        st.switch_page("Home.py")
+        st.rerun()
 
 def show_job_notifications():
     """Renders a notification bell in the sidebar for newly assigned jobs."""
