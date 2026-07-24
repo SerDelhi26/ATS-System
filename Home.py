@@ -26,13 +26,10 @@ if "password_reset_mode" not in st.session_state:
     st.session_state.password_reset_mode = False
 
 # ==========================
-# ROUTING & DYNAMIC NAVIGATION
+# AUTHENTICATION & ROUTING
 # ==========================
 if not st.session_state.logged_in:
-    # Hide sidebar navigation completely while logged out
-    pg = st.navigation([st.Page("Home.py", title="Login", icon="🔐")], position="hidden")
-    
-    # Render Login Form UI
+    # Render Login Form UI directly without conflicting navigation loops
     st.markdown("# 🔐 Welcome to ATS Login")
     st.markdown("Please sign in to continue.")
     
@@ -79,7 +76,8 @@ if not st.session_state.logged_in:
             except Exception as e:
                 st.error(f"Login error: {str(e)}")
                 
-    pg.run()
+    # Stop execution here so the sidebar and dashboard pages don't render while logged out
+    st.stop()
 
 else:
     # User is logged in: Build dynamic page list based on role
