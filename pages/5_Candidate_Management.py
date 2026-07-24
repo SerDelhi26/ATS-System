@@ -828,17 +828,17 @@ with left_col:
                 "Email is mandatory."
             )
 
+        # NORMALIZE PHONES BEFORE VALIDATING LENGTH TO FIX INVISIBLE SPACES
+        norm_mobile_val = normalize_phone(mobile_no)
+        norm_alt_val = normalize_phone(alternate_mobile)
+
         if not mobile_no.strip():
 
             validation_errors.append(
                 "Mobile Number is mandatory."
             )
 
-        elif (
-            not mobile_no.isdigit()
-            or
-            len(mobile_no) != 10
-        ):
+        elif len(norm_mobile_val) != 10:
 
             validation_errors.append(
                 "Please enter a valid 10-digit Mobile Number."
@@ -847,11 +847,7 @@ with left_col:
         if (
             alternate_mobile.strip()
             and
-            (
-                not alternate_mobile.isdigit()
-                or
-                len(alternate_mobile) != 10
-            )
+            len(norm_alt_val) != 10
         ):
 
             validation_errors.append(
@@ -863,9 +859,7 @@ with left_col:
             and
             alternate_mobile.strip()
             and
-            mobile_no.strip()
-            ==
-            alternate_mobile.strip()
+            norm_mobile_val == norm_alt_val
         ):
 
             validation_errors.append(
@@ -971,8 +965,8 @@ with left_col:
             selected_company_id = next((j["company_id"] for j in all_jobs if j["job_id"] == selected_job_id), None)
 
             norm_email = email.strip().lower()
-            norm_mobile = normalize_phone(mobile_no)
-            norm_alt = normalize_phone(alternate_mobile)
+            norm_mobile = norm_mobile_val
+            norm_alt = norm_alt_val
             norm_first = first_name.strip().lower()
             norm_last = last_name.strip().lower()
 
@@ -1101,11 +1095,12 @@ with left_col:
                 "email":
                     email.strip().lower(),
 
+                # Save the sanitized phone numbers to ensure a clean database
                 "mobile_no":
-                    mobile_no.strip(),
+                    norm_mobile_val,
 
                 "alternate_mobile":
-                    alternate_mobile.strip(),
+                    norm_alt_val,
 
                 "current_location":
                     current_location.strip(),
