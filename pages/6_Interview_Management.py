@@ -4,6 +4,7 @@ from common import show_logout
 from datetime import date, datetime
 from theme import apply_theme
 
+
 # ==========================
 # LOGIN CHECK
 # ==========================
@@ -37,13 +38,15 @@ st.markdown(
     "# 📅 ATS Interview Management"
 )
 
+
 # ==========================
 # FUNCTIONS
 # ==========================
 
 @st.cache_data(ttl=300)
 def get_candidates_for_interview():
-
+    # Removed the strict .or_ filter so we fetch all relevant candidates into memory
+    # We will filter them dynamically in Python based on whether we are Scheduling or Editing
     return (
         supabase
         .table("candidate_management")
@@ -57,9 +60,6 @@ def get_candidates_for_interview():
             current_stage,
             candidate_status
             """
-        )
-        .or_(
-            "candidate_status.eq.Shortlisted,current_stage.eq.Interview"
         )
         .execute()
         .data
@@ -110,7 +110,6 @@ def get_jobs():
 @st.cache_data(ttl=300)
 def get_candidate_lookup():
 
-    # SUGGESTION 3: Fetch 'current_stage' so we can lock past interview rounds
     return (
         supabase
         .table("candidate_management")
@@ -127,66 +126,53 @@ def get_candidate_lookup():
         .data
     )
 
+
 def update_candidate_stage(
     candidate_id,
-    interview_status
+    interview_status=None
 ):
-
+    
+    # 1. Fetch current stage from candidate to ensure we don't downgrade an Offer/Joined
     response = (
         supabase
         .table("candidate_management")
         .select("current_stage")
-        .eq(
-            "candidate_id",
-            candidate_id
-        )
+        .eq("candidate_id", candidate_id)
         .single()
         .execute()
     )
-
-    current_stage = (
-        response.data.get("current_stage")
-    )
-
-    # Do not allow rollback
-    if current_stage in [
-        "Selected",
-        "Rejected"
-    ]:
-
+    current_stage = response.data.get("current_stage")
+    
+    # If they are already in Offer or Joined, do not touch their stage from the Interview module
+    if current_stage in ["Offer", "Joined"]:
         return
 
-    if interview_status in [
-        "Scheduled",
-        "Completed",
-        "Rescheduled",
-        "On Hold"
-    ]:
-
-        stage = "Interview"
-
-    elif interview_status == "Selected":
-
+    # 2. Smart Stage Calculation: Look at ALL interview rounds for this candidate
+    res = (
+        supabase
+        .table("interview_management")
+        .select("interview_status")
+        .eq("candidate_id", candidate_id)
+        .execute()
+    )
+    
+    statuses = [item["interview_status"] for item in res.data]
+    
+    # Calculate the highest achieved state
+    if "Selected" in statuses:
         stage = "Selected"
-
-    elif interview_status == "Rejected":
-
+    elif "Rejected" in statuses:
         stage = "Rejected"
-
-    else:
-
+    elif any(s in ["Scheduled", "Completed", "Rescheduled", "On Hold"] for s in statuses):
         stage = "Interview"
-
+    else:
+        stage = "Shortlisted" # Fallback if all interview records were somehow deleted
+        
     (
         supabase
         .table("candidate_management")
-        .update({
-            "current_stage": stage
-        })
-        .eq(
-            "candidate_id",
-            candidate_id
-        )
+        .update({"current_stage": stage})
+        .eq("candidate_id", candidate_id)
         .execute()
     )
 
@@ -208,6 +194,7 @@ def get_interview_by_id(
     )
 
     return result.data
+
 
 
 # ==========================
@@ -287,6 +274,7 @@ if st.session_state.edit_interview_id:
         st.rerun()
 
 
+
 # ==========================
 # DROPDOWN VALUES
 # ==========================
@@ -319,6 +307,7 @@ left_col, right_col = st.columns(
     [1, 3]
 )
 
+
 # ==========================
 # LEFT PANEL
 # ==========================
@@ -345,10 +334,15 @@ with left_col:
         terminal_stages = ["Selected", "Rejected", "Offer", "Joined"]
         candidates = [
             c for c in raw_candidates 
-            if c.get("current_stage") not in terminal_stages
+            if (c.get("candidate_status") == "Shortlisted" or c.get("current_stage") == "Interview")
+            and c.get("current_stage") not in terminal_stages
         ]
     else:
-        candidates = raw_candidates
+        # In edit mode, include candidates who are already Selected/Rejected so the dropdown works!
+        candidates = [
+            c for c in raw_candidates 
+            if c.get("candidate_status") == "Shortlisted" or c.get("current_stage") in ["Interview", "Selected", "Rejected", "Offer", "Joined"]
+        ]
 
     candidate_lookup = {}
 
@@ -595,6 +589,7 @@ with left_col:
         key=get_key("remarks")
     )
 
+
     # ----------------------
     # BUTTONS
     # ----------------------
@@ -783,12 +778,12 @@ with left_col:
                     )
 
                     update_candidate_stage(
-                        selected_candidate_id,
-                        interview_status
+                        selected_candidate_id
                     )
 
                     # Specific cache clear
                     get_candidates_for_interview.clear()
+                    get_candidate_lookup.clear()
 
                     st.success(
                         "Interview Updated Successfully."
@@ -810,12 +805,12 @@ with left_col:
                     )
 
                     update_candidate_stage(
-                        selected_candidate_id,
-                        interview_status
+                        selected_candidate_id
                     )
 
                     # Specific cache clear
                     get_candidates_for_interview.clear()
+                    get_candidate_lookup.clear()
 
                     st.success(
                         "Interview Scheduled Successfully."
@@ -830,6 +825,8 @@ with left_col:
                 st.error(
                     str(e)
                 )
+
+
 # ==========================
 # RIGHT PANEL
 # ==========================
