@@ -45,7 +45,7 @@ st.markdown(
 
 @st.cache_data(ttl=300)
 def get_candidates_for_interview():
-    # Removed the strict .or_ filter so we fetch all relevant candidates into memory
+    # Fetch all relevant candidates into memory
     # We will filter them dynamically in Python based on whether we are Scheduling or Editing
     return (
         supabase
@@ -158,7 +158,7 @@ def update_candidate_stage(
     
     statuses = [item["interview_status"] for item in res.data]
     
-    # Calculate the highest achieved state
+    # Calculate the highest achieved state based on their historical rounds
     if "Selected" in statuses:
         stage = "Selected"
     elif "Rejected" in statuses:
