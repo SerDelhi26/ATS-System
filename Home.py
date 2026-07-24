@@ -26,9 +26,10 @@ if "password_reset_mode" not in st.session_state:
     st.session_state.password_reset_mode = False
 
 # ==========================
-# ROUTING & VIEWS (LOGGED OUT)
+# LOGIN & RESET VIEW FUNCTION
 # ==========================
-if not st.session_state.logged_in:
+def login_view():
+    """Encapsulates the login and password reset UI to work seamlessly with the router."""
     
     # VIEW 1: PASSWORD RESET MODE
     if st.session_state.password_reset_mode:
@@ -81,10 +82,10 @@ if not st.session_state.logged_in:
                             st.rerun()
                 except Exception as e:
                     st.error(f"Error: {str(e)}")
-                    
-        st.stop()
+        
+        return # Stop execution of the login form if in reset mode
 
-    # VIEW 2: LOGIN FORM
+    # VIEW 2: STANDARD LOGIN FORM
     st.markdown("# 🔐 Welcome to ATS Login")
     st.markdown("Please sign in to continue.")
     
@@ -130,13 +131,17 @@ if not st.session_state.logged_in:
                         st.error("Incorrect password.")
             except Exception as e:
                 st.error(f"Login error: {str(e)}")
-                
-    st.stop()
+
+# ==========================
+# ROUTING & NAVIGATION
+# ==========================
+if not st.session_state.logged_in:
+    # Explicitly enforce a hidden navigation menu pointing to the function above
+    pg = st.navigation([st.Page(login_view, title="Login", icon="🔐")], position="hidden")
+    pg.run()
 
 else:
-    # ==========================
-    # LOGGED-IN NAVIGATION & PAGES (Points to 'views' folder)
-    # ==========================
+    # User is logged in: Build dynamic page list based on role
     pages_list = [
         st.Page("views/2_Dashboard.py", title="Dashboard", icon="📊"),
         st.Page("views/5_Candidate_Management.py", title="Candidate Management", icon="👤"),
