@@ -30,7 +30,7 @@ if "password_reset_mode" not in st.session_state:
 # ==========================
 if not st.session_state.logged_in:
     
-    # VIEW 1: PASSWORD RESET MODE (Handles reset directly on login screen)
+    # VIEW 1: PASSWORD RESET MODE
     if st.session_state.password_reset_mode:
         st.markdown("# 🔑 Change Password")
         st.info("Enter your current password and choose a new password.")
@@ -135,23 +135,23 @@ if not st.session_state.logged_in:
 
 else:
     # ==========================
-    # LOGGED-IN NAVIGATION & PAGES
+    # LOGGED-IN NAVIGATION & PAGES (Points to 'views' folder)
     # ==========================
     pages_list = [
-        st.Page("pages/2_Dashboard.py", title="Dashboard", icon="📊"),
-        st.Page("pages/5_Candidate_Management.py", title="Candidate Management", icon="👤"),
-        st.Page("pages/6_Interview_Management.py", title="Interview Management", icon="📅"),
-        st.Page("pages/7_Offer_Management.py", title="Offer Management", icon="📄"),
-        st.Page("pages/8_Report_Management.py", title="Report Management", icon="📈"),
+        st.Page("views/2_Dashboard.py", title="Dashboard", icon="📊"),
+        st.Page("views/5_Candidate_Management.py", title="Candidate Management", icon="👤"),
+        st.Page("views/6_Interview_Management.py", title="Interview Management", icon="📅"),
+        st.Page("views/7_Offer_Management.py", title="Offer Management", icon="📄"),
+        st.Page("views/8_Report_Management.py", title="Report Management", icon="📈"),
     ]
 
     # Conditionally insert Admin-only pages
     if st.session_state.user_role == "Admin":
-        pages_list.insert(1, st.Page("pages/3_User_Management.py", title="User Management", icon="👥"))
-        pages_list.insert(2, st.Page("pages/4_Job_Management.py", title="Job Management", icon="💼"))
+        pages_list.insert(1, st.Page("views/3_User_Management.py", title="User Management", icon="👥"))
+        pages_list.insert(2, st.Page("views/4_Job_Management.py", title="Job Management", icon="💼"))
 
-    # Add Change Password page for when users are logged in and want to use the sidebar page
-    pages_list.append(st.Page("pages/1_Change_Password.py", title="Change Password", icon="🔑"))
+    # Add Change Password page for when logged in
+    pages_list.append(st.Page("views/1_Change_Password.py", title="Change Password", icon="🔑"))
 
     pg = st.navigation(pages_list, position="sidebar")
     pg.run()
