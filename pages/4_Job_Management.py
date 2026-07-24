@@ -4,7 +4,9 @@ from db import supabase
 from datetime import datetime
 from common import show_logout
 from theme import apply_theme
-
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 # ==========================
 # LOGIN CHECK
@@ -170,6 +172,48 @@ def get_job_by_id(job_id):
 
     return result.data
 
+def send_job_assignment_email(to_email, recruiter_name, job_ref, job_title, company_name):
+    """
+    Sends an email notification via Outlook/SMTP when a new job is assigned.
+    """
+    try:
+        # SMTP Settings from st.secrets
+        smtp_server = st.secrets.get("SMTP_SERVER", "smtp.office365.com")
+        smtp_port = st.secrets.get("SMTP_PORT", 587)
+        sender_email = st.secrets["SENDER_EMAIL"]
+        sender_password = st.secrets["SENDER_PASSWORD"]
+
+        msg = MIMEMultipart()
+        msg["From"] = sender_email
+        msg["To"] = to_email
+        msg["Subject"] = f"New Job Assigned: {job_ref} - {job_title}"
+
+        body = f"""
+Hi {recruiter_name},
+
+You have been assigned to a new job in the ATS.
+
+Job Reference: {job_ref}
+Job Title: {job_title}
+Company: {company_name}
+
+Please log in to the ATS portal to view full details and start sourcing candidates.
+
+Best regards,
+ATS Management Team
+        """
+        msg.attach(MIMEText(body, "plain"))
+
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()
+        server.login(sender_email, sender_password)
+        server.sendmail(sender_email, to_email, msg.as_string())
+        server.quit()
+        return True
+    except Exception as e:
+        st.error(f"Failed to send email to {to_email}: {e}")
+        return False
+
 # ==========================
 # LAYOUT
 # ==========================
@@ -199,6 +243,18 @@ with left_col:
         if editing_job
         else "Create Job"
     )
+
+    # -----------------------------
+    # Outlook Pre-Flight Check
+    # -----------------------------
+    st.markdown("### 📧 Outlook Integration")
+    outlook_checked = st.checkbox(
+        "✅ I confirm that Microsoft Outlook is open",
+        key="outlook_check"
+    )
+
+    if not outlook_checked:
+        st.warning("⚠️ Please open Outlook before proceeding.")
 
     # -----------------------------
     # Recruiter Assignment
@@ -321,7 +377,7 @@ with left_col:
                     .execute()
                 )
                 
-                # Performance Fix 1: Specific cache clear to ensure new items show immediately
+                # Performance Fix 1: Specific cache clear
                 get_job_titles.clear()
 
                 st.success(
@@ -403,7 +459,7 @@ with left_col:
                     .execute()
                 )
                 
-                # Performance Fix 1: Specific cache clear to ensure new items show immediately
+                # Performance Fix 1: Specific cache clear
                 get_companies.clear()
 
                 st.success(
@@ -485,7 +541,7 @@ with left_col:
                     .execute()
                 )
                 
-                # Performance Fix 1: Specific cache clear to ensure new items show immediately
+                # Performance Fix 1: Specific cache clear
                 get_categories.clear()
 
                 st.success(
@@ -951,6 +1007,10 @@ with left_col:
         )
 
     if update_clicked:
+        # Outlook Check
+        if not outlook_checked:
+            st.error("❌ Action blocked: Please open Outlook and check the confirmation box to proceed.")
+            st.stop()
 
         try:
             # -----------------------------
@@ -1266,13 +1326,22 @@ with left_col:
                     })
                     .execute()
                 )
+                
+                # TRIGGER EMAIL ON NEW JOB CREATION
+                if recruiter.get("email"):
+                    send_job_assignment_email(
+                        recruiter["email"],
+                        recruiter["full_name"],
+                        job_ref,
+                        selected_job_title,
+                        selected_company
+                    )
 
             st.session_state.success_message = (
                 f"Job Created : {job_ref}"
             )
 
             for key in [
-                #"selected_recruiters",
                 "location",
                 "job_title",
                 "company",
@@ -1404,7 +1473,6 @@ with right_col:
 
     assignments_data = assignments.data
 
-    # Performance Fix 2: Added .limit(500) and order desc to prevent DB query overload
     jobs = (
         supabase
         .table("job_management")
@@ -1554,7 +1622,6 @@ with right_col:
 
     if not jobs_df.empty:
 
-        # Performance Fix 3: Slicing DataFrame to limit UI rendering to 25 rows max
         total_jobs = len(jobs_df)
         display_jobs_df = jobs_df.head(25)
         
@@ -1578,7 +1645,6 @@ with right_col:
 
         st.divider()
 
-        # Render only the limited DataFrame rows
         for _, row in display_jobs_df.iterrows():
 
             cols = st.columns(
@@ -1716,11 +1782,6 @@ with right_col:
 
                 cols[7].write("-")
 
-
-            # -------------------------
-            # EDIT BUTTON
-            # -------------------------
-
             if cols[8].button(
                 "✏️",
                 key=f"edit_{row['job_id']}"
@@ -1733,36 +1794,24 @@ with right_col:
                 for field in [
 
                     "sub_category",
-
                     "location",
-
                     "min_year",
                     "min_month",
-
                     "max_year",
                     "max_month",
-
                     "job_type",
-
                     "openings",
-
                     "pay_min",
                     "pay_max",
-
                     "currency",
                     "pay_unit",
-
                     "skills_required",
                     "job_description",
-
                     "performa_invoice_no",
                     "performa_invoice_status",
-
                     "invoice_no",
                     "invoice_status",
-
                     "job_status",
-
                     "remark"
 
                 ]:
@@ -1772,10 +1821,6 @@ with right_col:
                         del st.session_state[field]
 
                 st.rerun()
-
-            # -------------------------
-            # CLOSE / REOPEN BUTTON
-            # -------------------------
 
             if row["job_status"] == "Open":
 
