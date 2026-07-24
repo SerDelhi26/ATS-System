@@ -1,15 +1,21 @@
 import streamlit as st
 from db import supabase
 
+def show_logout():
+    """Renders the standard logout button in the sidebar."""
+    if st.button("🚪 Logout", use_container_width=True):
+        st.session_state.clear()
+        st.switch_page("Home.py")
+
 def show_job_notifications():
-    # Only run for logged-in recruiters
+    """Renders a notification bell in the sidebar for newly assigned jobs."""
     if not st.session_state.get("logged_in", False):
         return
         
     user_id = st.session_state.get("user_id")
     user_role = st.session_state.get("user_role")
     
-    # Typically notifications are for recruiters, but you can include admins if needed
+    # Notifications are primarily for recruiters
     if user_role != "Recruiter":
         return
 
@@ -26,7 +32,6 @@ def show_job_notifications():
         
         # 3. Initialize seen jobs in session state if not present
         if "seen_job_ids" not in st.session_state:
-            # On first login, mark current jobs as seen so it doesn't trigger a flood of past alerts
             st.session_state.seen_job_ids = [j["job_id"] for j in jobs]
             
         # 4. Filter for unseen open jobs
@@ -40,20 +45,17 @@ def show_job_notifications():
         # 5. Render the Notification Widget in the Sidebar
         with st.sidebar:
             st.markdown("---")
-            if count >  0:
-                # Highlighted notification box when new jobs arrive
+            if count > 0:
                 with st.expander(f"🔔 New Jobs ({count})", expanded=True):
                     st.markdown(f"**You have {count} newly assigned job(s):**")
                     for j in unseen_jobs:
                         st.markdown(f"📌 **{j['job_reference_no']}**")
                     
                     if st.button("Mark as Read", use_container_width=True):
-                        # Update seen IDs to include all current job IDs
                         st.session_state.seen_job_ids = [j["job_id"] for j in jobs]
                         st.rerun()
             else:
                 st.markdown("🔔 **Notifications:** All caught up!")
 
     except Exception as e:
-        # Fail silently in the UI so a network blip doesn't crash the sidebar
         pass
