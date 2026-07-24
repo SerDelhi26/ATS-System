@@ -1,5 +1,5 @@
 import streamlit as st
-from common import show_logout, show_job_notifications
+from common import show_logout, show_job_notifications, show_user_profile
 from db import supabase
 import pandas as pd
 import plotly.express as px
@@ -56,6 +56,7 @@ st.set_page_config(
 apply_theme()
 
 with st.sidebar:
+    show_user_profile()
     show_logout()
     show_job_notifications()
 

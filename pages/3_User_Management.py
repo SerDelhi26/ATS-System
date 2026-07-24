@@ -3,7 +3,7 @@ import pandas as pd
 import re
 from db import supabase
 from datetime import date
-from common import show_logout, show_job_notifications
+from common import show_logout, show_job_notifications, show_user_profile
 import bcrypt
 from theme import apply_theme
 
@@ -56,7 +56,7 @@ if "reset_user_id" not in st.session_state:
     st.session_state.reset_user_id = None
 
 with st.sidebar:
-
+    show_user_profile()
     show_logout()
     show_job_notifications()
     

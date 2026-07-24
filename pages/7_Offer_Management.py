@@ -1,6 +1,6 @@
 import streamlit as st
 from db import supabase
-from common import show_logout, show_job_notifications
+from common import show_logout, show_job_notifications, show_user_profile
 from datetime import date, datetime
 from theme import apply_theme
 
@@ -29,7 +29,7 @@ st.set_page_config(
 apply_theme()
 
 with st.sidebar:
-
+    show_user_profile()
     show_logout()
     show_job_notifications()
 
