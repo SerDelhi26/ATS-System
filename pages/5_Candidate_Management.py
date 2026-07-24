@@ -977,35 +977,32 @@ with left_col:
             norm_last = last_name.strip().lower()
 
             # Build dynamic OR conditions
+            # FIXED: Added double quotes around values to prevent API crashes if text contains spaces
             or_conditions = []
             
             if norm_email:
-                or_conditions.append(f"email.eq.{norm_email}")
+                or_conditions.append(f'email.eq."{norm_email}"')
                 
             if norm_mobile:
-                or_conditions.append(f"mobile_no.eq.{norm_mobile}")
-                or_conditions.append(f"alternate_mobile.eq.{norm_mobile}")
+                or_conditions.append(f'mobile_no.eq."{norm_mobile}"')
+                or_conditions.append(f'alternate_mobile.eq."{norm_mobile}"')
                 
             if norm_alt:
-                or_conditions.append(f"mobile_no.eq.{norm_alt}")
-                or_conditions.append(f"alternate_mobile.eq.{norm_alt}")
+                or_conditions.append(f'mobile_no.eq."{norm_alt}"')
+                or_conditions.append(f'alternate_mobile.eq."{norm_alt}"')
                 
             if norm_first and norm_last:
-                or_conditions.append(f"and(first_name.ilike.{norm_first},last_name.ilike.{norm_last})")
+                or_conditions.append(f'and(first_name.ilike."{norm_first}",last_name.ilike."{norm_last}")')
 
             or_string = ",".join(or_conditions)
 
+            # FIXED: Removed multi-line whitespace which crashes the PostgREST select parser
             duplicates = (
                 supabase
                 .table(
                     "candidate_management"
                 )
-                .select(
-                    """
-                    *,
-                    created_at
-                    """
-                )
+                .select("*") 
                 .or_(
                     or_string
                 )
