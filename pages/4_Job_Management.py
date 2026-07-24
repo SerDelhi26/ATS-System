@@ -5,7 +5,6 @@ from datetime import datetime
 from common import show_logout
 from theme import apply_theme
 
-
 # ==========================
 # LOGIN CHECK
 # ==========================
@@ -58,6 +57,10 @@ if "edit_job_id" not in st.session_state:
 if "job_document_url" not in st.session_state:
 
     st.session_state.job_document_url = None
+
+# COUNTER FOR FORM RESET
+if "form_reset_job" not in st.session_state:
+    st.session_state.form_reset_job = 0
 
 if st.session_state.get("success_message"):
 
@@ -194,6 +197,12 @@ with left_col:
 
             job_defaults = editing_job
 
+    # Helper function for dynamic keys
+    def get_key(base_name):
+        if editing_job:
+            return f"{base_name}_{editing_job['job_id']}"
+        return f"{base_name}_new_{st.session_state.form_reset_job}"
+
     st.subheader(
         "Edit Job"
         if editing_job
@@ -244,9 +253,7 @@ with left_col:
         default=assigned_recruiters
         if editing_job
         else [],
-        key=f"selected_recruiters_{editing_job['job_id']}"
-        if editing_job
-        else "selected_recruiters_new"
+        key=get_key("selected_recruiters")
     )
 
     # -----------------------------
@@ -278,19 +285,17 @@ with left_col:
         "Job Title",
         job_title_names,
         index=0 if not editing_job
-        else job_title_names.index(default_job_title),
-        key=f"job_title_{editing_job['job_id']}"
-        if editing_job
-        else "job_title_new"
+        else job_title_names.index(default_job_title) if default_job_title in job_title_names else 0,
+        key=get_key("job_title")
     )
 
-    if st.checkbox("Add New Job Title"):
+    if st.checkbox("Add New Job Title", key=get_key("add_new_title")):
 
         new_job_title = st.text_input(
-            "New Job Title"
+            "New Job Title", key=get_key("new_title_input")
         )
 
-        if st.button("Save Job Title"):
+        if st.button("Save Job Title", key=get_key("save_title_btn")):
 
             existing = (
                 supabase
@@ -321,7 +326,6 @@ with left_col:
                     .execute()
                 )
                 
-                # Performance Fix 1: Specific cache clear to ensure new items show immediately
                 get_job_titles.clear()
 
                 st.success(
@@ -359,20 +363,18 @@ with left_col:
         "Company",
         company_names,
         index=company_names.index(default_company)
-        if editing_job
+        if editing_job and default_company in company_names
         else 0,
-        key=f"company_{editing_job['job_id']}"
-        if editing_job
-        else "company_new"
+        key=get_key("company")
     )
 
-    if st.checkbox("Add New Company"):
+    if st.checkbox("Add New Company", key=get_key("add_new_company")):
 
         new_company = st.text_input(
-            "New Company"
+            "New Company", key=get_key("new_company_input")
         )
 
-        if st.button("Save Company"):
+        if st.button("Save Company", key=get_key("save_company_btn")):
 
             existing = (
                 supabase
@@ -403,7 +405,6 @@ with left_col:
                     .execute()
                 )
                 
-                # Performance Fix 1: Specific cache clear to ensure new items show immediately
                 get_companies.clear()
 
                 st.success(
@@ -441,20 +442,18 @@ with left_col:
         "Category",
         category_names,
         index=category_names.index(default_category)
-        if editing_job
+        if editing_job and default_category in category_names
         else 0,
-        key=f"category_{editing_job['job_id']}"
-        if editing_job
-        else "category_new"
+        key=get_key("category")
     )
 
-    if st.checkbox("Add New Category"):
+    if st.checkbox("Add New Category", key=get_key("add_new_cat")):
 
         new_category = st.text_input(
-            "New Category"
+            "New Category", key=get_key("new_cat_input")
         )
 
-        if st.button("Save Category"):
+        if st.button("Save Category", key=get_key("save_cat_btn")):
 
             existing = (
                 supabase
@@ -485,7 +484,6 @@ with left_col:
                     .execute()
                 )
                 
-                # Performance Fix 1: Specific cache clear to ensure new items show immediately
                 get_categories.clear()
 
                 st.success(
@@ -543,18 +541,16 @@ with left_col:
         index=sub_category_names.index(default_sub_category)
         if editing_job and default_sub_category in sub_category_names
         else 0,
-        key=f"sub_category_{editing_job['job_id']}"
-        if editing_job
-        else "sub_category_new"
+        key=get_key("sub_category")
     )
 
-    if st.checkbox("Add New Sub Category"):
+    if st.checkbox("Add New Sub Category", key=get_key("add_new_subcat")):
 
         new_sub_category = st.text_input(
-            "New Sub Category"
+            "New Sub Category", key=get_key("new_subcat_input")
         )
 
-        if st.button("Save Sub Category"):
+        if st.button("Save Sub Category", key=get_key("save_subcat_btn")):
 
             (
                 supabase
@@ -581,9 +577,7 @@ with left_col:
             ""
         ),
         placeholder="-- Enter Location --",
-        key=f"location_{editing_job['job_id']}"
-        if editing_job
-        else "location_new"
+        key=get_key("location")
     )
 
     st.markdown(
@@ -597,9 +591,7 @@ with left_col:
             "experience_min_year",
             0
         ),
-        key=f"min_year_{editing_job['job_id']}"
-        if editing_job
-        else "min_year_new"
+        key=get_key("min_year")
     )
 
     min_month = st.selectbox(
@@ -609,9 +601,7 @@ with left_col:
             "experience_min_month",
             0
         ),
-        key=f"min_month_{editing_job['job_id']}"
-        if editing_job
-        else "min_month_new"
+        key=get_key("min_month")
     )
 
     max_year = st.selectbox(
@@ -621,9 +611,7 @@ with left_col:
             "experience_max_year",
             0
         ),
-        key=f"max_year_{editing_job['job_id']}"
-        if editing_job
-        else "max_year_new"
+        key=get_key("max_year")
     )
 
     max_month = st.selectbox(
@@ -633,9 +621,7 @@ with left_col:
             "experience_max_month",
             0
         ),
-        key=f"max_month_{editing_job['job_id']}"
-        if editing_job
-        else "max_month_new"
+        key=get_key("max_month")
     )
 
     job_type_options = [
@@ -656,12 +642,10 @@ with left_col:
                     "Permanent"
                 )
             )
-            if editing_job
+            if editing_job and job_defaults.get("job_type") in job_type_options
             else 0
         ),
-        key=f"job_type_{editing_job['job_id']}"
-        if editing_job
-        else "job_type_new"
+        key=get_key("job_type")
     )
 
     openings = st.number_input(
@@ -671,9 +655,7 @@ with left_col:
             "openings",
             1
         ),
-        key=f"openings_{editing_job['job_id']}"
-        if editing_job
-        else "openings_new"
+        key=get_key("openings")
     )
 
     # -----------------------------
@@ -693,9 +675,7 @@ with left_col:
                 0
             )
         ),
-        key=f"pay_min_{editing_job['job_id']}"
-        if editing_job
-        else "pay_min_new"
+        key=get_key("pay_min")
     )
 
     pay_max = st.number_input(
@@ -707,9 +687,7 @@ with left_col:
                 0
             )
         ),
-        key=f"pay_max_{editing_job['job_id']}"
-        if editing_job
-        else "pay_max_new"
+        key=get_key("pay_max")
     )
 
     currency_options = [
@@ -729,12 +707,10 @@ with left_col:
                     "INR"
                 )
             )
-            if editing_job
+            if editing_job and job_defaults.get("currency") in currency_options
             else 0
         ),
-        key=f"currency_{editing_job['job_id']}"
-        if editing_job
-        else "currency_new"
+        key=get_key("currency")
     )
 
     pay_unit_options = [
@@ -755,12 +731,10 @@ with left_col:
                     "Per Annum"
                 )
             )
-            if editing_job
+            if editing_job and job_defaults.get("pay_unit") in pay_unit_options
             else 0
         ),
-        key=f"pay_unit_{editing_job['job_id']}"
-        if editing_job
-        else "pay_unit_new"
+        key=get_key("pay_unit")
     )
 
     # -----------------------------
@@ -778,9 +752,7 @@ with left_col:
             ""
         ),
         height=120,
-        key=f"skills_required_{editing_job['job_id']}"
-        if editing_job
-        else "skills_required_new"
+        key=get_key("skills_required")
     )
 
     job_description = st.text_area(
@@ -790,9 +762,7 @@ with left_col:
             ""
         ),
         height=250,
-        key=f"job_description_{editing_job['job_id']}"
-        if editing_job
-        else "job_description_new"
+        key=get_key("job_description")
     )
 
     job_document = st.file_uploader(
@@ -804,7 +774,7 @@ with left_col:
             "xlsx",
             "xls"
         ],
-        key="job_document"
+        key=get_key("job_document")
     )
 
     # -----------------------------
@@ -821,9 +791,7 @@ with left_col:
             "performa_invoice_no",
             ""
         ),
-        key=f"performa_invoice_no_{editing_job['job_id']}"
-        if editing_job
-        else "performa_invoice_no_new"
+        key=get_key("performa_invoice_no")
     )
 
     performa_status_options = [
@@ -843,12 +811,10 @@ with left_col:
                     "Pending"
                 )
             )
-            if editing_job
+            if editing_job and job_defaults.get("performa_invoice_status") in performa_status_options
             else 0
         ),
-        key=f"performa_invoice_status_{editing_job['job_id']}"
-        if editing_job
-        else "performa_invoice_status_new"
+        key=get_key("performa_invoice_status")
     )
 
     invoice_no = st.text_input(
@@ -857,9 +823,7 @@ with left_col:
             "invoice_no",
             ""
         ),
-        key=f"invoice_no_{editing_job['job_id']}"
-        if editing_job
-        else "invoice_no_new"
+        key=get_key("invoice_no")
     )
 
     invoice_status_options = [
@@ -879,12 +843,10 @@ with left_col:
                     "Pending"
                 )
             )
-            if editing_job
+            if editing_job and job_defaults.get("invoice_status") in invoice_status_options
             else 0
         ),
-        key=f"invoice_status_{editing_job['job_id']}"
-        if editing_job
-        else "invoice_status_new"
+        key=get_key("invoice_status")
     )
 
     remark = st.text_area(
@@ -894,9 +856,7 @@ with left_col:
             ""
         ),
         height=100,
-        key=f"remark_{editing_job['job_id']}"
-        if editing_job
-        else "remark_new"
+        key=get_key("remark")
     )
 
     job_status_options = [
@@ -917,12 +877,10 @@ with left_col:
                     "Open"
                 )
             )
-            if editing_job
+            if editing_job and job_defaults.get("job_status") in job_status_options
             else 0
         ),
-        key=f"job_status_{editing_job['job_id']}"
-        if editing_job
-        else "job_status_new"
+        key=get_key("job_status")
     )
 
     if editing_job:
@@ -1271,37 +1229,8 @@ with left_col:
                 f"Job Created : {job_ref}"
             )
 
-            for key in [
-                #"selected_recruiters",
-                "location",
-                "job_title",
-                "company",
-                "category",
-                "sub_category",
-                "min_year",
-                "min_month",
-                "max_year",
-                "max_month",
-                "job_type",
-                "openings",
-                "pay_min",
-                "pay_max",
-                "currency",
-                "pay_unit",
-                "skills_required",
-                "job_description",
-                "performa_invoice_no",
-                "performa_invoice_status",
-                "invoice_no",
-                "invoice_status",
-                "job_status",
-                "remark",
-                "job_document"
-            ]:
-
-                if key in st.session_state:
-                    del st.session_state[key]
-
+            # RESET FORM
+            st.session_state.form_reset_job += 1
             st.rerun()
 
         except Exception as e:
@@ -1404,7 +1333,7 @@ with right_col:
 
     assignments_data = assignments.data
 
-    # Performance Fix 2: Added .limit(500) and order desc to prevent DB query overload
+    # Performance Fix: Limit query
     jobs = (
         supabase
         .table("job_management")
@@ -1554,7 +1483,6 @@ with right_col:
 
     if not jobs_df.empty:
 
-        # Performance Fix 3: Slicing DataFrame to limit UI rendering to 25 rows max
         total_jobs = len(jobs_df)
         display_jobs_df = jobs_df.head(25)
         
@@ -1578,7 +1506,6 @@ with right_col:
 
         st.divider()
 
-        # Render only the limited DataFrame rows
         for _, row in display_jobs_df.iterrows():
 
             cols = st.columns(
@@ -1717,10 +1644,6 @@ with right_col:
                 cols[7].write("-")
 
 
-            # -------------------------
-            # EDIT BUTTON
-            # -------------------------
-
             if cols[8].button(
                 "✏️",
                 key=f"edit_{row['job_id']}"
@@ -1730,52 +1653,7 @@ with right_col:
                     row["job_id"]
                 )
 
-                for field in [
-
-                    "sub_category",
-
-                    "location",
-
-                    "min_year",
-                    "min_month",
-
-                    "max_year",
-                    "max_month",
-
-                    "job_type",
-
-                    "openings",
-
-                    "pay_min",
-                    "pay_max",
-
-                    "currency",
-                    "pay_unit",
-
-                    "skills_required",
-                    "job_description",
-
-                    "performa_invoice_no",
-                    "performa_invoice_status",
-
-                    "invoice_no",
-                    "invoice_status",
-
-                    "job_status",
-
-                    "remark"
-
-                ]:
-
-                    if field in st.session_state:
-
-                        del st.session_state[field]
-
                 st.rerun()
-
-            # -------------------------
-            # CLOSE / REOPEN BUTTON
-            # -------------------------
 
             if row["job_status"] == "Open":
 
