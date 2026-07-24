@@ -234,6 +234,10 @@ if "pending_duplicate_type" not in st.session_state:
 
     st.session_state.pending_duplicate_type = None
 
+if "trigger_save" not in st.session_state:
+
+    st.session_state.trigger_save = False
+
 editing = False
 candidate = None
 
@@ -742,6 +746,10 @@ with left_col:
                 st.session_state.duplicate_override = True
                 st.session_state.pending_duplicate = None
                 st.session_state.pending_duplicate_type = None
+                
+                # TELL THE SYSTEM TO AUTO-SAVE ON RERUN
+                st.session_state.trigger_save = True
+                
                 st.rerun()
 
         st.stop()
@@ -781,12 +789,18 @@ with left_col:
         st.session_state.pending_duplicate_type = None
 
         st.session_state.duplicate_override = False
+        st.session_state.trigger_save = False
 
         st.session_state.candidate_form_reset += 1
 
         st.rerun()
 
-    if save_candidate:
+    # TRIGGER SAVE EITHER BY BUTTON CLICK OR BY OUR MEMORY FLAG
+    if save_candidate or st.session_state.get("trigger_save", False):
+        
+        # Reset the flag immediately so it doesn't loop
+        if st.session_state.get("trigger_save", False):
+            st.session_state.trigger_save = False
 
         validation_errors = []
 
