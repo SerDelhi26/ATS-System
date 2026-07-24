@@ -678,12 +678,13 @@ with left_col:
         else:
 
             # ==========================
-            # TERMINAL STATE VALIDATION
+            # TERMINAL STATE & ROUND VALIDATION
             # ==========================
+            # We now fetch 'interview_round' as well to check for duplicates
             existing_interviews_response = (
                 supabase
                 .table("interview_management")
-                .select("interview_id, interview_status")
+                .select("interview_id, interview_status, interview_round")
                 .eq("candidate_id", selected_candidate_id)
                 .execute()
             )
@@ -692,9 +693,19 @@ with left_col:
             
             already_selected = False
             already_rejected = False
+            duplicate_round = False
+            
+            norm_new_round = interview_round.strip().lower()
             
             for ei in existing_interviews:
-                # Skip checking against the exact record currently being edited
+                
+                # Rule 1: Check for duplicate round names (case-insensitive)
+                # We skip this check if we are currently editing this exact same record
+                if not editing or ei["interview_id"] != interview["interview_id"]:
+                    if str(ei.get("interview_round", "")).strip().lower() == norm_new_round:
+                        duplicate_round = True
+
+                # Rule 2: Skip checking terminal states against the exact record currently being edited
                 if editing and ei["interview_id"] == interview["interview_id"]:
                     continue 
                     
@@ -702,6 +713,10 @@ with left_col:
                     already_selected = True
                 elif ei["interview_status"] == "Rejected":
                     already_rejected = True
+                    
+            if duplicate_round:
+                st.error(f"🚨 This candidate already has an interview round named '{interview_round.strip()}'. Please use a different round name (e.g., L2, Final).")
+                st.stop()
                     
             if not editing and already_selected:
                 st.error("🚨 This candidate has already been 'Selected'. The interview flow is complete, and no new rounds can be added.")
