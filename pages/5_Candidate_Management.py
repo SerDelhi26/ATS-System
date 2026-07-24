@@ -51,6 +51,13 @@ def sanitize_filename(filename):
     clean_name = re.sub(r'[^a-zA-Z0-9._-]', '_', name)
     return f"{clean_name}{ext}"
 
+def normalize_phone(phone):
+    """Strips country codes and spaces. Returns only the last 10 digits."""
+    if not phone:
+        return ""
+    digits = re.sub(r'\D', '', str(phone))
+    return digits[-10:] if len(digits) >= 10 else digits
+
 
 @st.cache_data(ttl=300)
 def get_jobs_for_user(
@@ -181,6 +188,17 @@ def get_job_titles():
         .data
     )
 
+@st.cache_data(ttl=3600)
+def get_companies():
+
+    return (
+        supabase
+        .table("company_master")
+        .select("*")
+        .execute()
+        .data
+    )
+
 @st.cache_data(ttl=300)
 def get_recruiters():
 
@@ -212,6 +230,10 @@ if "pending_duplicate" not in st.session_state:
 
     st.session_state.pending_duplicate = None
 
+if "pending_duplicate_type" not in st.session_state:
+
+    st.session_state.pending_duplicate_type = None
+
 editing = False
 candidate = None
 
@@ -222,28 +244,7 @@ if st.session_state.edit_candidate_id:
         .table("candidate_management")
         .select(
             """
-            candidate_id,
-            job_id,
-            first_name,
-            last_name,
-            email,
-            mobile_no,
-            alternate_mobile,
-            current_location,
-            experience_years,
-            experience_months,
-            qualification,
-            education_details,
-            current_company,
-            current_designation,
-            current_ctc,
-            expected_ctc,
-            notice_period,
-            notice_negotiable,
-            skills,
-            candidate_status,
-            remarks,
-            created_by_user_id
+            *
             """
         )
         .eq(
@@ -315,6 +316,13 @@ with left_col:
 
     }
 
+    companies = get_companies()
+
+    company_lookup = {
+        item["company_id"]: item["company_name"]
+        for item in companies
+    }
+
     all_jobs = (
         supabase
         .table("job_management")
@@ -322,7 +330,8 @@ with left_col:
             """
             job_id,
             job_reference_no,
-            job_title_id
+            job_title_id,
+            company_id
             """
         )
         .execute()
@@ -666,66 +675,74 @@ with left_col:
         key=get_key("remarks")
     )
 
+    # ==========================
+    # SMART DUPLICATE WARNING UI
+    # ==========================
     if st.session_state.pending_duplicate:
 
         existing = (
             st.session_state.pending_duplicate
         )
 
+        dup_type = (
+            st.session_state.pending_duplicate_type
+        )
+
+        existing_job_id = existing["job_id"]
         existing_job = (
             job_display_lookup.get(
-                existing["job_id"],
-                ""
+                existing_job_id,
+                "Unknown Job"
             )
         )
 
-        st.warning(
+        existing_company_id = next((j["company_id"] for j in all_jobs if j["job_id"] == existing_job_id), None)
+        existing_company_name = company_lookup.get(existing_company_id, "Unknown Company") if existing_company_id else "Unknown Company"
 
-            f"Candidate already exists in ATS.\n\n"
+        if dup_type == "SAME_JOB":
+            st.error(f"🚨 **Hard Duplicate Detected!**\n\nThis candidate has already applied for this exact job.")
+        elif dup_type == "SAME_COMPANY":
+            st.warning(f"⚠️ **Same Company Warning**\n\nThis candidate already exists in your ATS for another job at **{existing_company_name}** (applied within the last 6 months).")
+        elif dup_type == "GLOBAL":
+            st.warning(f"⚠️ **Global ATS Warning**\n\nThis candidate already exists in your database for **{existing_company_name}** (applied within the last 6 months).")
+        elif dup_type == "NAME_MATCH":
+            st.info(f"ℹ️ **Name Match Warning**\n\nWe found another candidate with the exact name '{existing['first_name']} {existing['last_name']}', but different contact details (within the last 6 months). Please verify.")
 
-            f"Candidate No : "
-            f"{existing['candidate_reference_no']}\n\n"
 
-            f"Name : "
-            f"{existing['first_name']} "
-            f"{existing['last_name']}\n\n"
-
-            f"Current Job : "
-            f"{existing_job}\n\n"
-
-            f"Stage : "
-            f"{existing.get('current_stage','')}\n\n"
-
-            f"Entered By : "
-            f"{existing.get('created_by_name','')}"
-
-        )
+        st.markdown(f"""
+        **Existing Record Details:**
+        * Candidate No: {existing['candidate_reference_no']}
+        * Name: {existing['first_name']} {existing['last_name']}
+        * Job: {existing_job}
+        * Stage: {existing.get('current_stage', 'Unknown')}
+        * Entered By: {existing.get('created_by_name', 'Unknown')}
+        """)
 
         col1, col2 = st.columns(2)
 
-        if col1.button(
-            "👁 View Existing Candidate",
-            use_container_width=True
-        ):
+        if dup_type == "SAME_JOB":
+            if st.button("👁️ Show Application", use_container_width=True):
+                st.session_state.edit_candidate_id = existing["candidate_id"]
+                st.session_state.pending_duplicate = None
+                st.session_state.pending_duplicate_type = None
+                st.rerun()
+                
+            if st.button("❌ Cancel Submission", use_container_width=True):
+                st.session_state.pending_duplicate = None
+                st.session_state.pending_duplicate_type = None
+                st.rerun()
+        else:
+            if col1.button("👁️ View Earlier Record", use_container_width=True):
+                st.session_state.edit_candidate_id = existing["candidate_id"]
+                st.session_state.pending_duplicate = None
+                st.session_state.pending_duplicate_type = None
+                st.rerun()
 
-            st.session_state.edit_candidate_id = (
-                existing["candidate_id"]
-            )
-
-            st.session_state.pending_duplicate = None
-
-            st.rerun()
-
-        if col2.button(
-            "✅ Create New Submission",
-            use_container_width=True
-        ):
-
-            st.session_state.duplicate_override = True
-
-            st.session_state.pending_duplicate = None
-
-            st.rerun()
+            if col2.button("✅ Save Candidate Details", use_container_width=True):
+                st.session_state.duplicate_override = True
+                st.session_state.pending_duplicate = None
+                st.session_state.pending_duplicate_type = None
+                st.rerun()
 
         st.stop()
 
@@ -761,6 +778,7 @@ with left_col:
         st.session_state.edit_candidate_id = None
 
         st.session_state.pending_duplicate = None
+        st.session_state.pending_duplicate_type = None
 
         st.session_state.duplicate_override = False
 
@@ -939,42 +957,54 @@ with left_col:
 
         else:
 
+            # ==========================
+            # DUPLICATE CHECK ENGINE
+            # ==========================
+
             selected_job_record = (
                 job_lookup[
                     selected_job
                 ]
             )
+            
+            selected_job_id = selected_job_record["job_id"]
+            selected_company_id = next((j["company_id"] for j in all_jobs if j["job_id"] == selected_job_id), None)
 
-            # Build duplicate check conditions dynamically to avoid matching empty strings
+            norm_email = email.strip().lower()
+            norm_mobile = normalize_phone(mobile_no)
+            norm_alt = normalize_phone(alternate_mobile)
+            norm_first = first_name.strip().lower()
+            norm_last = last_name.strip().lower()
+
+            # Build dynamic OR conditions
             or_conditions = []
             
-            if email.strip():
-                or_conditions.append(f"email.eq.{email.strip().lower()}")
+            if norm_email:
+                or_conditions.append(f"email.eq.{norm_email}")
                 
-            if mobile_no.strip():
-                or_conditions.append(f"mobile_no.eq.{mobile_no.strip()}")
-                or_conditions.append(f"alternate_mobile.eq.{mobile_no.strip()}")
+            if norm_mobile:
+                or_conditions.append(f"mobile_no.eq.{norm_mobile}")
+                or_conditions.append(f"alternate_mobile.eq.{norm_mobile}")
                 
-            if alternate_mobile.strip():
-                or_conditions.append(f"mobile_no.eq.{alternate_mobile.strip()}")
-                or_conditions.append(f"alternate_mobile.eq.{alternate_mobile.strip()}")
+            if norm_alt:
+                or_conditions.append(f"mobile_no.eq.{norm_alt}")
+                or_conditions.append(f"alternate_mobile.eq.{norm_alt}")
+                
+            if norm_first and norm_last:
+                or_conditions.append(f"and(first_name.ilike.{norm_first},last_name.ilike.{norm_last})")
 
             or_string = ",".join(or_conditions)
 
-            duplicate_candidate = (
+            duplicates = (
                 supabase
                 .table(
                     "candidate_management"
                 )
                 .select(
                     """
-                    candidate_id,
-                    candidate_reference_no
+                    *,
+                    created_at
                     """
-                )
-                .eq(
-                    "job_id",
-                    selected_job_record["job_id"]
                 )
                 .or_(
                     or_string
@@ -985,164 +1015,80 @@ with left_col:
             # Ignore self during edit
             if editing:
 
-                duplicate_candidate.data = [
+                duplicates.data = [
 
                     item
 
-                    for item in duplicate_candidate.data
+                    for item in duplicates.data
 
                     if item["candidate_id"]
                     != candidate["candidate_id"]
 
                 ]
 
-            if duplicate_candidate.data:
 
-                existing_candidate = (
-                    duplicate_candidate.data[0]
-                )
+            if duplicates.data and not st.session_state.duplicate_override:
+                
+                highest_priority_dup = None
+                dup_type = None
+                priority_map = {"SAME_JOB": 4, "SAME_COMPANY": 3, "GLOBAL": 2, "NAME_MATCH": 1, None: 0}
+                
+                for d in duplicates.data:
+                    d_email = (d.get("email") or "").strip().lower()
+                    d_mobile = normalize_phone(d.get("mobile_no"))
+                    d_alt = normalize_phone(d.get("alternate_mobile"))
+                    d_first = (d.get("first_name") or "").strip().lower()
+                    d_last = (d.get("last_name") or "").strip().lower()
+                    
+                    d_job_id = d["job_id"]
+                    d_company_id = next((j["company_id"] for j in all_jobs if j["job_id"] == d_job_id), None)
 
-                st.error(
+                    # Cooling-Off Period Logic (180 Days)
+                    days_old = 0
+                    created_at_str = d.get("created_at")
+                    if created_at_str:
+                        try:
+                            clean_time = created_at_str.split(".")[0].split("+")[0].replace("Z", "")
+                            created_at_date = datetime.strptime(clean_time, "%Y-%m-%dT%H:%M:%S")
+                            days_old = (datetime.now() - created_at_date).days
+                        except:
+                            pass
+                    
+                    # Determine Match Criteria
+                    is_contact_match = False
+                    if norm_email and norm_email == d_email: is_contact_match = True
+                    if norm_mobile and norm_mobile in [d_mobile, d_alt]: is_contact_match = True
+                    if norm_alt and norm_alt in [d_mobile, d_alt]: is_contact_match = True
+                    
+                    current_dup_type = None
+                    if is_contact_match:
+                        if d_job_id == selected_job_id:
+                            current_dup_type = "SAME_JOB"
+                        elif d_company_id == selected_company_id:
+                            current_dup_type = "SAME_COMPANY"
+                        else:
+                            current_dup_type = "GLOBAL"
+                    elif norm_first == d_first and norm_last == d_last and norm_first != "":
+                        current_dup_type = "NAME_MATCH"
 
-                    f"Candidate already exists "
-                    f"for this Job. "
-                    f"Candidate No : "
-                    f"{existing_candidate['candidate_reference_no']}"
+                    # Apply Cooling Off Period for non-job matches
+                    if current_dup_type in ["SAME_COMPANY", "GLOBAL", "NAME_MATCH"] and days_old > 180:
+                        current_dup_type = None
+                        
+                    # Apply highest threat level
+                    if current_dup_type and priority_map[current_dup_type] > priority_map[dup_type]:
+                        dup_type = current_dup_type
+                        highest_priority_dup = d
+                        
+                if highest_priority_dup:
+                    st.session_state.pending_duplicate = highest_priority_dup
+                    st.session_state.pending_duplicate_type = dup_type
+                    st.rerun()
 
-                )
 
-                st.stop()
-
-            soft_duplicate = (
-                supabase
-                .table(
-                    "candidate_management"
-                )
-                .select(
-                    """
-                    candidate_id,
-                    candidate_reference_no,
-                    first_name,
-                    last_name,
-                    email,
-                    mobile_no,
-                    alternate_mobile,
-                    current_stage,
-                    job_id,
-                    created_by_name
-                    """
-                )
-                .execute()
-            )
-
-            normalized_email = (
-                email.strip().lower()
-            )
-
-            normalized_mobile = (
-                mobile_no.strip()
-            )
-
-            normalized_alternate = (
-                alternate_mobile.strip()
-            )
-
-            soft_matches = []
-
-            for existing in soft_duplicate.data:
-
-                if (
-                    editing
-                    and
-                    existing["candidate_id"]
-                    ==
-                    candidate["candidate_id"]
-                ):
-
-                    continue
-
-                match_found = False
-
-                if (
-                    normalized_email
-                    and
-                    str(
-                        existing.get(
-                            "email",
-                            ""
-                        )
-                    ).lower()
-                    ==
-                    normalized_email
-                ):
-
-                    match_found = True
-
-                elif (
-                    normalized_mobile
-                    and
-                    (
-                        existing.get(
-                            "mobile_no",
-                            ""
-                        )
-                        ==
-                        normalized_mobile
-
-                        or
-
-                        existing.get(
-                            "alternate_mobile",
-                            ""
-                        )
-                        ==
-                        normalized_mobile
-                    )
-                ):
-
-                    match_found = True
-
-                elif (
-                    normalized_alternate
-                    and
-                    (
-                        existing.get(
-                            "mobile_no",
-                            ""
-                        )
-                        ==
-                        normalized_alternate
-
-                        or
-
-                        existing.get(
-                            "alternate_mobile",
-                            ""
-                        )
-                        ==
-                        normalized_alternate
-                    )
-                ):
-
-                    match_found = True
-
-                if match_found:
-
-                    soft_matches.append(
-                        existing
-                    )
-
-            if (
-                soft_matches
-                and
-                not st.session_state.duplicate_override
-            ):
-
-                st.session_state.pending_duplicate = (
-                    soft_matches[0]
-                )
-
-                st.rerun()
+            # ==========================
+            # SAVE DATA
+            # ==========================
 
             candidate_data = {
 
@@ -1240,6 +1186,7 @@ with left_col:
                 st.session_state.duplicate_override = False
 
                 st.session_state.pending_duplicate = None
+                st.session_state.pending_duplicate_type = None
 
                 st.session_state.candidate_form_reset += 1
 
@@ -1333,6 +1280,7 @@ with left_col:
                 st.session_state.duplicate_override = False
 
                 st.session_state.pending_duplicate = None
+                st.session_state.pending_duplicate_type = None
 
                 st.session_state.candidate_form_reset += 1
 
