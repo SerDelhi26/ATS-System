@@ -51,6 +51,7 @@ def sanitize_filename(filename):
     clean_name = re.sub(r'[^a-zA-Z0-9._-]', '_', name)
     return f"{clean_name}{ext}"
 
+
 @st.cache_data(ttl=300)
 def get_jobs_for_user(
     user_id,
@@ -128,7 +129,8 @@ def upload_resume(
 ):
 
     try:
-        # Sanitize filename
+
+        # Sanitize filename to prevent InvalidKey errors in Supabase
         safe_name = sanitize_filename(file_name)
         file_bytes = uploaded_file.getvalue()
 
@@ -218,7 +220,32 @@ if st.session_state.edit_candidate_id:
     response = (
         supabase
         .table("candidate_management")
-        .select("*")
+        .select(
+            """
+            candidate_id,
+            job_id,
+            first_name,
+            last_name,
+            email,
+            mobile_no,
+            alternate_mobile,
+            current_location,
+            experience_years,
+            experience_months,
+            qualification,
+            education_details,
+            current_company,
+            current_designation,
+            current_ctc,
+            expected_ctc,
+            notice_period,
+            notice_negotiable,
+            skills,
+            candidate_status,
+            remarks,
+            created_by_user_id
+            """
+        )
         .eq(
             "candidate_id",
             st.session_state.edit_candidate_id
@@ -257,6 +284,12 @@ if st.session_state.edit_candidate_id:
 left_col, right_col = st.columns([1, 3])
 
 with left_col:
+
+    # Helper function to generate safe, dynamic keys for resetting
+    def get_key(base_name):
+        if editing:
+            return f"{base_name}_{candidate['candidate_id']}"
+        return f"{base_name}_new_{st.session_state.candidate_form_reset}"
 
     st.markdown(
         "## ✏️ Edit Candidate"
@@ -340,10 +373,8 @@ with left_col:
     selected_job = st.selectbox(
         "Job *",
         job_options,
-        index=job_options.index(
-            selected_job_label
-        ),
-        key=f"job_{st.session_state.candidate_form_reset}"
+        index=job_options.index(selected_job_label) if selected_job_label in job_options else 0,
+        key=get_key("job")
     )
 
     col1, col2 = st.columns(2)
@@ -356,7 +387,7 @@ with left_col:
             candidate["first_name"]
             if editing
             else "",
-            key=f"first_name_{st.session_state.candidate_form_reset}"
+            key=get_key("first_name")
         )
 
     with col2:
@@ -367,7 +398,7 @@ with left_col:
             candidate["last_name"]
             if editing
             else "",
-            key=f"last_name_{st.session_state.candidate_form_reset}"
+            key=get_key("last_name")
         )
         
     email = st.text_input(
@@ -376,7 +407,7 @@ with left_col:
         candidate["email"]
         if editing
         else "",
-        key=f"email_{st.session_state.candidate_form_reset}"
+        key=get_key("email")
     )
 
     col1, col2 = st.columns(2)
@@ -389,7 +420,7 @@ with left_col:
             candidate["mobile_no"]
             if editing
             else "",
-            key=f"mobile_no_{st.session_state.candidate_form_reset}"
+            key=get_key("mobile_no")
         )
 
     with col2:
@@ -400,7 +431,7 @@ with left_col:
             candidate["alternate_mobile"]
             if editing
             else "",
-            key=f"alternate_mobile_{st.session_state.candidate_form_reset}"
+            key=get_key("alternate_mobile")
         )
 
     current_location = st.text_input(
@@ -409,7 +440,7 @@ with left_col:
         candidate["current_location"]
         if editing
         else "",
-        key=f"current_location_{st.session_state.candidate_form_reset}"
+        key=get_key("location")
     )
 
     col1, col2 = st.columns(2)
@@ -431,7 +462,7 @@ with left_col:
                 and candidate["experience_years"] in years_options
                 else 0
             ),
-            key=f"experience_years_{st.session_state.candidate_form_reset}"
+            key=get_key("exp_years")
         )
 
     with col2:
@@ -451,7 +482,7 @@ with left_col:
                 and candidate["experience_months"] in months_options
                 else 0
             ),
-            key=f"experience_months_{st.session_state.candidate_form_reset}"
+            key=get_key("exp_months")
         )
 
     st.markdown(
@@ -464,7 +495,7 @@ with left_col:
         candidate["qualification"]
         if editing
         else "",
-        key=f"qualification_{st.session_state.candidate_form_reset}"
+        key=get_key("qual")
     )
 
     education_details = st.text_area(
@@ -473,7 +504,7 @@ with left_col:
         candidate["education_details"]
         if editing
         else "",
-        key=f"education_details_{st.session_state.candidate_form_reset}"
+        key=get_key("edu")
     )
 
     st.markdown(
@@ -486,7 +517,7 @@ with left_col:
         candidate["current_company"]
         if editing
         else "",
-        key=f"current_company_{st.session_state.candidate_form_reset}"
+        key=get_key("company")
     )
 
     current_designation = st.text_input(
@@ -495,7 +526,7 @@ with left_col:
         candidate["current_designation"]
         if editing
         else "",
-        key=f"current_designation_{st.session_state.candidate_form_reset}"
+        key=get_key("designation")
     )
 
     col1, col2 = st.columns(2)
@@ -511,7 +542,7 @@ with left_col:
             if editing
             and candidate["current_ctc"]
             else 0.0,
-            key=f"current_ctc_{st.session_state.candidate_form_reset}"
+            key=get_key("current_ctc")
         )
 
     with col2:
@@ -525,7 +556,7 @@ with left_col:
             if editing
             and candidate["expected_ctc"]
             else 0.0,
-            key=f"expected_ctc_{st.session_state.candidate_form_reset}"
+            key=get_key("expected_ctc")
         )
 
     col1, col2 = st.columns(2)
@@ -555,7 +586,7 @@ with left_col:
                 and candidate["notice_period"] in notice_period_options
                 else 0
             ),
-            key=f"notice_period_{st.session_state.candidate_form_reset}"
+            key=get_key("notice_period")
         )
 
     with col2:
@@ -578,7 +609,7 @@ with left_col:
                 and candidate["notice_negotiable"] in notice_negotiable_options
                 else 0
             ),
-            key=f"notice_negotiable_{st.session_state.candidate_form_reset}"
+            key=get_key("notice_negotiable")
         )
 
     st.markdown(
@@ -591,7 +622,7 @@ with left_col:
         candidate["skills"]
         if editing
         else "",
-        key=f"skills_{st.session_state.candidate_form_reset}"
+        key=get_key("skills")
     )
 
     resume = st.file_uploader(
@@ -601,7 +632,7 @@ with left_col:
             "doc",
             "docx"
         ],
-        key=f"resume_{st.session_state.candidate_form_reset}"
+        key=get_key("resume")
     )
 
     candidate_status_options = [
@@ -623,7 +654,7 @@ with left_col:
             and candidate["candidate_status"] in candidate_status_options
             else 0
         ),
-        key=f"candidate_status_{st.session_state.candidate_form_reset}"
+        key=get_key("status")
     )
 
     remarks = st.text_area(
@@ -632,7 +663,7 @@ with left_col:
         candidate["remarks"]
         if editing
         else "",
-        key=f"remarks_{st.session_state.candidate_form_reset}"
+        key=get_key("remarks")
     )
 
     if st.session_state.pending_duplicate:
