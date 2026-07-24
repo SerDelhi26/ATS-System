@@ -476,14 +476,19 @@ with left_col:
 
     if editing:
 
-        btn1, btn2 = st.columns(2)
+        btn1, btn2, btn3 = st.columns(3)
 
         update_clicked = btn1.button(
             "Update Offer",
             use_container_width=True
         )
+        
+        delete_clicked = btn2.button(
+            "🗑️ Delete Offer",
+            use_container_width=True
+        )
 
-        cancel_clicked = btn2.button(
+        cancel_clicked = btn3.button(
             "❌ Cancel Edit",
             use_container_width=True
         )
@@ -496,12 +501,42 @@ with left_col:
         )
 
         cancel_clicked = False
+        delete_clicked = False
 
     if cancel_clicked:
 
         st.session_state.edit_offer_id = None
         st.session_state.form_reset_offer += 1
         st.rerun()
+        
+    if delete_clicked:
+        
+        try:
+            # 1. Delete the offer record from the database
+            (
+                supabase
+                .table("offer_management")
+                .delete()
+                .eq("offer_id", offer["offer_id"])
+                .execute()
+            )
+            
+            # 2. Revert the candidate's master stage back to "Selected"
+            (
+                supabase
+                .table("candidate_management")
+                .update({"current_stage": "Selected"})
+                .eq("candidate_id", selected_candidate_id)
+                .execute()
+            )
+            
+            st.success("Offer deleted successfully. Candidate reverted to 'Selected' stage.")
+            st.session_state.edit_offer_id = None
+            st.session_state.form_reset_offer += 1
+            st.rerun()
+            
+        except Exception as e:
+            st.error(f"Error deleting offer: {str(e)}")
 
     # ----------------------
     # SAVE / UPDATE
