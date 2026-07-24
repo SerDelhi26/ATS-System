@@ -1,7 +1,7 @@
 import streamlit as st
 from db import supabase
 from common import show_logout
-from datetime import date
+from datetime import date, datetime
 from theme import apply_theme
 
 # ==========================
@@ -60,7 +60,9 @@ def get_candidates_for_offer():
             "current_stage",
             [
                 "Selected",
-                "Offer"
+                "Offer",
+                "Joined",
+                "Rejected"
             ]
         )
         .execute()
@@ -79,6 +81,17 @@ def get_job_titles():
         .data
     )
 
+@st.cache_data(ttl=3600)
+def get_companies():
+
+    return (
+        supabase
+        .table("company_master")
+        .select("*")
+        .execute()
+        .data
+    )
+
 
 @st.cache_data(ttl=300)
 def get_jobs():
@@ -90,7 +103,8 @@ def get_jobs():
             """
             job_id,
             job_reference_no,
-            job_title_id
+            job_title_id,
+            company_id
             """
         )
         .execute()
@@ -190,13 +204,24 @@ job_title_lookup = {
 
 }
 
+companies = get_companies()
+
+company_lookup = {
+    
+    item["company_id"]: 
+    item["company_name"]
+    
+    for item in companies
+    
+}
+
 jobs = get_jobs()
 
 job_display_lookup = {
 
     job["job_id"]:
-    f"{job['job_reference_no']} | "
-    f"{job_title_lookup.get(job['job_title_id'], '')}"
+    f"{job_title_lookup.get(job['job_title_id'], 'Unknown Title')} | "
+    f"{company_lookup.get(job.get('company_id'), 'Unknown Company')}"
 
     for job in jobs
 
@@ -209,6 +234,10 @@ job_display_lookup = {
 if "edit_offer_id" not in st.session_state:
 
     st.session_state.edit_offer_id = None
+
+if "form_reset_offer" not in st.session_state:
+
+    st.session_state.form_reset_offer = 0
 
 # ==========================
 # EDIT MODE
@@ -231,6 +260,7 @@ if st.session_state.edit_offer_id:
     else:
 
         st.session_state.edit_offer_id = None
+        st.rerun()
 
 # ==========================
 # DROPDOWN VALUES
@@ -266,6 +296,12 @@ left_col, right_col = st.columns(
 
 with left_col:
 
+    def get_key(base_name):
+        if editing:
+            return f"{base_name}_{offer['offer_id']}"
+        return f"{base_name}_new_{st.session_state.form_reset_offer}"
+
+
     st.markdown(
         "## ✏️ Edit Offer"
         if editing
@@ -273,7 +309,16 @@ with left_col:
         "## 📄 Create Offer"
     )
 
-    candidates = get_candidates_for_offer()
+    raw_candidates = get_candidates_for_offer()
+
+    # Hide candidates who have already Joined or Rejected, unless we are editing them
+    if not editing:
+        candidates = [
+            c for c in raw_candidates 
+            if c.get("current_stage") in ["Selected", "Offer"]
+        ]
+    else:
+        candidates = raw_candidates
 
     candidate_lookup = {}
 
@@ -319,7 +364,8 @@ with left_col:
         candidate_options,
         index=candidate_options.index(
             selected_candidate_label
-        )
+        ) if selected_candidate_label in candidate_options else 0,
+        key=get_key("candidate_select")
     )
 
     selected_job_id = None
@@ -358,6 +404,7 @@ with left_col:
             )
         )
 
+    # NO KEY HERE - This allows the job text input to update live!
     st.text_input(
         "Job",
         value=selected_job_display,
@@ -378,17 +425,21 @@ with left_col:
             if editing
             and offer["offered_ctc"]
             else 0.0
-        )
+        ),
+        key=get_key("offered_ctc")
     )
+
+    default_join_date = None
+    if editing and offer.get("joining_date"):
+        try:
+            default_join_date = datetime.strptime(str(offer["joining_date"]), "%Y-%m-%d").date()
+        except:
+            default_join_date = None
 
     joining_date = st.date_input(
         "Joining Date *",
-        value=(
-            offer["joining_date"]
-            if editing
-            and offer["joining_date"]
-            else date.today()
-        )
+        value=default_join_date,
+        key=get_key("joining_date")
     )
 
     offer_status = st.selectbox(
@@ -402,7 +453,8 @@ with left_col:
             and offer["offer_status"]
             in offer_status_options
             else 0
-        )
+        ),
+        key=get_key("offer_status")
     )
 
     st.markdown(
@@ -417,7 +469,8 @@ with left_col:
             and offer["remarks"]
             else ""
         ),
-        height=120
+        height=120,
+        key=get_key("remarks")
     )
 
     # ----------------------
@@ -439,9 +492,11 @@ with left_col:
         )
 
     else:
+        
+        btn_label = "Update Offer Details" if offer_status in ["Offer Accepted", "Joined", "Offer Rejected", "No Show"] else "Save Offer"
 
         update_clicked = st.button(
-            "Save Offer",
+            btn_label,
             use_container_width=True
         )
 
@@ -450,7 +505,7 @@ with left_col:
     if cancel_clicked:
 
         st.session_state.edit_offer_id = None
-
+        st.session_state.form_reset_offer += 1
         st.rerun()
 
     # ----------------------
@@ -475,6 +530,12 @@ with left_col:
 
             validation_errors.append(
                 "Please enter Offered CTC."
+            )
+
+        if not joining_date:
+
+            validation_errors.append(
+                "Please select a Joining Date."
             )
 
         if (
@@ -580,7 +641,8 @@ with left_col:
                     st.success(
                         "Offer Saved Successfully."
                     )
-
+                
+                st.session_state.form_reset_offer += 1
                 st.rerun()
 
             except Exception as e:
