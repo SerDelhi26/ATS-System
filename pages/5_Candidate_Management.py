@@ -704,7 +704,7 @@ with left_col:
         existing_company_name = company_lookup.get(existing_company_id, "Unknown Company") if existing_company_id else "Unknown Company"
 
         if dup_type == "SAME_JOB":
-            st.error(f"🚨 **Hard Duplicate Detected!**\n\nThis candidate has already applied for this exact job.")
+            st.error(f"🚨 **Duplicate Detected!**\n\nThis candidate has already applied for this exact job.")
         elif dup_type == "SAME_COMPANY":
             st.warning(f"⚠️ **Same Company Warning**\n\nThis candidate already exists in your ATS for another job at **{existing_company_name}** (applied within the last 6 months).")
         elif dup_type == "GLOBAL":
