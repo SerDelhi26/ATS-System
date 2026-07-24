@@ -1,7 +1,7 @@
 import streamlit as st
 from db import supabase
 from common import show_logout
-from datetime import date
+from datetime import date, datetime
 from theme import apply_theme
 
 # ==========================
@@ -59,7 +59,7 @@ def get_candidates_for_interview():
             """
         )
         .or_(
-            "candidate_status.eq.Shortlisted,current_stage.eq.Interview,current_stage.eq.Shortlisted"
+            "candidate_status.eq.Shortlisted,current_stage.eq.Interview"
         )
         .execute()
         .data
@@ -77,6 +77,17 @@ def get_job_titles():
         .data
     )
 
+@st.cache_data(ttl=3600)
+def get_companies():
+
+    return (
+        supabase
+        .table("company_master")
+        .select("*")
+        .execute()
+        .data
+    )
+
 
 @st.cache_data(ttl=300)
 def get_jobs():
@@ -88,7 +99,8 @@ def get_jobs():
             """
             job_id,
             job_reference_no,
-            job_title_id
+            job_title_id,
+            company_id
             """
         )
         .execute()
@@ -131,7 +143,7 @@ def update_candidate_stage(
     )
 
     current_stage = (
-        response.data["current_stage"]
+        response.data.get("current_stage")
     )
 
     # Do not allow rollback
@@ -211,13 +223,24 @@ job_title_lookup = {
 
 }
 
+companies = get_companies()
+
+company_lookup = {
+    
+    item["company_id"]: 
+    item["company_name"]
+    
+    for item in companies
+    
+}
+
 jobs = get_jobs()
 
 job_display_lookup = {
 
     job["job_id"]:
-    f"{job['job_reference_no']} | "
-    f"{job_title_lookup.get(job['job_title_id'], '')}"
+    f"{job_title_lookup.get(job['job_title_id'], 'Unknown Title')} | "
+    f"{company_lookup.get(job.get('company_id'), 'Unknown Company')}"
 
     for job in jobs
 
@@ -300,7 +323,6 @@ left_col, right_col = st.columns(
 
 with left_col:
 
-    # Helper function to generate safe, dynamic keys for resetting
     def get_key(base_name):
         if editing:
             return f"{base_name}_{interview['interview_id']}"
@@ -359,8 +381,8 @@ with left_col:
         candidate_options,
         index=candidate_options.index(
             selected_candidate_label
-        ),
-        key=get_key("candidate")
+        ) if selected_candidate_label in candidate_options else 0,
+        key=get_key("candidate_select")
     )
 
     selected_job_display = ""
@@ -399,11 +421,11 @@ with left_col:
             )
         )
 
+    # REMOVED KEY SO IT UPDATES INSTANTLY
     st.text_input(
         "Job",
         value=selected_job_display,
-        disabled=True,
-        key=get_key("job_display")
+        disabled=True
     )
 
     st.markdown(
@@ -418,19 +440,22 @@ with left_col:
             else ""
         ),
         placeholder="-- Enter Round --",
-        key=get_key("round")
+        key=get_key("interview_round")
     )
+
+    # Date parsing logic to prevent crashes during Edit
+    default_date = date.today()
+    if editing and interview.get("interview_date"):
+        try:
+            # Handle standard string conversion safely
+            default_date = datetime.strptime(str(interview["interview_date"]), "%Y-%m-%d").date()
+        except:
+            pass
 
     interview_date = st.date_input(
         "Interview Date *",
-        value=(
-            datetime.strptime(interview["interview_date"], "%Y-%m-%d").date()
-            if editing and isinstance(interview["interview_date"], str)
-            else interview["interview_date"]
-            if editing
-            else date.today()
-        ),
-        key=get_key("date")
+        value=default_date,
+        key=get_key("interview_date")
     )
 
     time_options = [
@@ -486,17 +511,17 @@ with left_col:
             in time_options
             else 0
         ),
-        key=get_key("time")
+        key=get_key("interview_time")
     )
 
     interviewer_name = st.text_input(
         "Interviewer Name",
         value=(
             interview["interviewer_name"]
-            if editing
+            if editing and interview["interviewer_name"]
             else ""
         ),
-        key=get_key("interviewer")
+        key=get_key("interviewer_name")
     )
 
     interview_mode = st.selectbox(
@@ -511,7 +536,7 @@ with left_col:
             in interview_mode_options
             else 0
         ),
-        key=get_key("mode")
+        key=get_key("interview_mode")
     )
 
     interview_status = st.selectbox(
@@ -526,7 +551,7 @@ with left_col:
             in interview_status_options
             else 0
         ),
-        key=get_key("status")
+        key=get_key("interview_status")
     )
 
     st.markdown(
@@ -587,9 +612,7 @@ with left_col:
     if cancel_clicked:
 
         st.session_state.edit_interview_id = None
-
         st.session_state.form_reset_interview += 1
-
         st.rerun()
 
     # ----------------------
@@ -708,7 +731,7 @@ with left_col:
                         interview_status
                     )
 
-                    # Performance Fix 1: Specific cache clear instead of global clear
+                    # Specific cache clear
                     get_candidates_for_interview.clear()
 
                     st.success(
@@ -735,15 +758,15 @@ with left_col:
                         interview_status
                     )
 
-                    # Performance Fix 1: Specific cache clear instead of global clear
+                    # Specific cache clear
                     get_candidates_for_interview.clear()
 
                     st.success(
                         "Interview Scheduled Successfully."
                     )
-
-                st.session_state.form_reset_interview += 1
                 
+                # Advance Reset Tracker to clean the form
+                st.session_state.form_reset_interview += 1
                 st.rerun()
 
             except Exception as e:
