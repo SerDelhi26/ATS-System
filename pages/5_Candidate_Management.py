@@ -1,5 +1,6 @@
 import streamlit as st
 import re
+import os
 from datetime import datetime
 from db import supabase
 from common import show_logout
@@ -42,6 +43,14 @@ st.markdown(
 # ==========================
 # FUNCTIONS
 # ==========================
+
+def sanitize_filename(filename):
+    """Removes special characters to prevent Supabase storage errors."""
+    name, ext = os.path.splitext(filename)
+    # Replace anything that isn't alphanumeric, dot, dash, or underscore with an underscore
+    clean_name = re.sub(r'[^a-zA-Z0-9._-]', '_', name)
+    return f"{clean_name}{ext}"
+
 @st.cache_data(ttl=300)
 def get_jobs_for_user(
     user_id,
@@ -119,17 +128,18 @@ def upload_resume(
 ):
 
     try:
-
+        # Sanitize filename
+        safe_name = sanitize_filename(file_name)
         file_bytes = uploaded_file.getvalue()
 
         supabase.storage \
             .from_("Resume") \
             .upload(
-                file_name,
+                safe_name,
                 file_bytes
             )
 
-        return file_name
+        return safe_name
 
     except Exception as e:
 
@@ -208,32 +218,7 @@ if st.session_state.edit_candidate_id:
     response = (
         supabase
         .table("candidate_management")
-        .select(
-            """
-            candidate_id,
-            job_id,
-            first_name,
-            last_name,
-            email,
-            mobile_no,
-            alternate_mobile,
-            current_location,
-            experience_years,
-            experience_months,
-            qualification,
-            education_details,
-            current_company,
-            current_designation,
-            current_ctc,
-            expected_ctc,
-            notice_period,
-            notice_negotiable,
-            skills,
-            candidate_status,
-            remarks,
-            created_by_user_id
-            """
-        )
+        .select("*")
         .eq(
             "candidate_id",
             st.session_state.edit_candidate_id
