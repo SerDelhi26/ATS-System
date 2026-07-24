@@ -15,34 +15,39 @@ def show_job_notifications():
     user_id = st.session_state.get("user_id")
     user_role = st.session_state.get("user_role")
     
-    # Notifications are primarily for recruiters
+    # Notifications are meant for recruiters
     if user_role != "Recruiter":
         return
 
     try:
-        # 1. Get job IDs assigned to this recruiter
+        # 1. Fetch job assignments for this specific user ID
         assignments = supabase.table("job_assignment").select("job_id").eq("user_id", user_id).execute().data
         assigned_job_ids = [a["job_id"] for a in assignments]
         
         if not assigned_job_ids:
+            with st.sidebar:
+                st.markdown("---")
+                st.markdown("🔔 **Notifications:** No jobs assigned.")
             return
 
-        # 2. Fetch the actual job details for those IDs
+        # 2. Fetch the actual open job details for those IDs
         jobs = supabase.table("job_management").select("job_id, job_reference_no, job_status").in_("job_id", assigned_job_ids).execute().data
+        
+        open_assigned_jobs = [j for j in jobs if j["job_status"] == "Open"]
         
         # 3. Initialize seen jobs in session state if not present
         if "seen_job_ids" not in st.session_state:
-            st.session_state.seen_job_ids = [j["job_id"] for j in jobs]
+            st.session_state.seen_job_ids = []
             
         # 4. Filter for unseen open jobs
         unseen_jobs = [
-            j for j in jobs 
-            if j["job_id"] not in st.session_state.seen_job_ids and j["job_status"] == "Open"
+            j for j in open_assigned_jobs 
+            if j["job_id"] not in st.session_state.seen_job_ids
         ]
         
         count = len(unseen_jobs)
         
-        # 5. Render the Notification Widget in the Sidebar
+        # 5. Render Notification Widget in Sidebar
         with st.sidebar:
             st.markdown("---")
             if count > 0:
@@ -52,7 +57,8 @@ def show_job_notifications():
                         st.markdown(f"📌 **{j['job_reference_no']}**")
                     
                     if st.button("Mark as Read", use_container_width=True):
-                        st.session_state.seen_job_ids = [j["job_id"] for j in jobs]
+                        # Mark all currently assigned open jobs as seen
+                        st.session_state.seen_job_ids = [j["job_id"] for j in open_assigned_jobs]
                         st.rerun()
             else:
                 st.markdown("🔔 **Notifications:** All caught up!")
