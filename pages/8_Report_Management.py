@@ -123,7 +123,7 @@ report_rows = []
 for candidate in candidates:
     
     # 1. Parse Date
-    parsed_date = parse_date(candidate.get("created_at", ""))
+    parsed_date = parse_date(candidate.get("created_on", ""))
     
     # Date Filtering Logic
     if use_date_filter:
