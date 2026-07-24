@@ -302,11 +302,12 @@ with left_col:
 
     raw_candidates = get_candidates_for_offer()
     
-    # Filter for Dropdown: Only show "Selected" and "Offer" candidates when scheduling new offers
+    # ENHANCEMENT: Only show "Selected" candidates when scheduling new offers. 
+    # Once they get an offer, they hide automatically!
     if not editing:
         candidates = [
             c for c in raw_candidates 
-            if c.get("current_stage") in ["Selected", "Offer"]
+            if c.get("current_stage") == "Selected"
         ]
     else:
         # Include all relevant past stages in Edit Mode so the dropdown populates properly
