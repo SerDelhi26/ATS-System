@@ -62,33 +62,30 @@ st.caption(f"Welcome back, **{st.session_state.user_name}** ({st.session_state.u
 st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
 
 # ==========================
-# DATA FETCHING (CACHED)
+# OPTIMIZED DATA FETCHING (Selective Columns)
 # ==========================
 @st.cache_data(ttl=300)
 def get_dashboard_data():
-    jobs = supabase.table("job_management").select("*").execute().data
-    candidates = supabase.table("candidate_management").select("*").execute().data
-    interviews = supabase.table("interview_management").select("*").execute().data
-    offers = supabase.table("offer_management").select("*").execute().data
-    assignments = supabase.table("job_assignment").select("*").execute().data
-    recruiters = supabase.table("users").select("*").eq("role", "Recruiter").execute().data
-    job_titles = supabase.table("job_title_master").select("*").execute().data
-    companies = supabase.table("company_master").select("*").execute().data
+    # Only fetch columns needed for metrics, charts, and tables to prevent RAM bloating
+    jobs = supabase.table("job_management").select("job_id, job_reference_no, job_status, openings, company_id, job_title_id").execute().data
+    candidates = supabase.table("candidate_management").select("candidate_id, job_id, current_stage, created_by_name").execute().data
+    interviews = supabase.table("interview_management").select("interview_id, candidate_id, interview_status, created_by_name").execute().data
+    assignments = supabase.table("job_assignment").select("job_id, user_id").execute().data
+    recruiters = supabase.table("users").select("user_id, full_name").eq("role", "Recruiter").execute().data
+    job_titles = supabase.table("job_title_master").select("job_title_id, job_title_name").execute().data
+    companies = supabase.table("company_master").select("company_id, company_name").execute().data
     
-    return jobs, candidates, interviews, offers, assignments, recruiters, job_titles, companies
+    return jobs, candidates, interviews, assignments, recruiters, job_titles, companies
 
-# Load all data
-jobs, candidates, interviews, offers, assignments, recruiters, job_titles, companies = get_dashboard_data()
+jobs, candidates, interviews, assignments, recruiters, job_titles, companies = get_dashboard_data()
 
 # Lookups
 job_title_lookup = {item["job_title_id"]: item["job_title_name"] for item in job_titles}
 company_lookup = {item["company_id"]: item["company_name"] for item in companies}
 
-
 # ==========================
 # TOP LEVEL METRICS
 # ==========================
-# Calculate Metrics
 open_jobs = len([j for j in jobs if j.get("job_status") == "Open"])
 total_candidates = len(candidates)
 active_interviews = len([i for i in interviews if i.get("interview_status") in ["Scheduled", "Rescheduled"]])
@@ -96,13 +93,13 @@ total_hired = len([c for c in candidates if c.get("current_stage") == "Joined"])
 
 col1, col2, col3, col4 = st.columns(4)
 with col1:
-    kpi_card("Open Jobs", open_jobs, "💼", "#2563EB") # Blue
+    kpi_card("Open Jobs", open_jobs, "💼", "#2563EB")
 with col2:
-    kpi_card("Total Candidates", total_candidates, "👥", "#8B5CF6") # Purple
+    kpi_card("Total Candidates", total_candidates, "👥", "#8B5CF6")
 with col3:
-    kpi_card("Upcoming Interviews", active_interviews, "📅", "#F59E0B") # Orange
+    kpi_card("Upcoming Interviews", active_interviews, "📅", "#F59E0B")
 with col4:
-    kpi_card("Total Hired", total_hired, "🎉", "#10B981") # Green
+    kpi_card("Total Hired", total_hired, "🎉", "#10B981")
 
 st.markdown("<div style='height:30px'></div>", unsafe_allow_html=True)
 
@@ -111,10 +108,8 @@ st.markdown("<div style='height:30px'></div>", unsafe_allow_html=True)
 # ==========================
 chart_col1, chart_col2 = st.columns([3, 2])
 
-# 1. Candidate Pipeline Funnel Chart
 with chart_col1:
     st.markdown("### 🎯 Recruitment Pipeline")
-    
     stages = ["New", "Screening", "Shortlisted", "Interview", "Selected", "Offer", "Joined"]
     pipeline_counts = {stage: 0 for stage in stages}
     
@@ -128,20 +123,12 @@ with chart_col1:
         "Count": list(pipeline_counts.values())
     })
     
-    # Plotly Funnel Chart
-    fig_funnel = px.funnel(
-        funnel_df, 
-        x='Count', 
-        y='Stage',
-        color_discrete_sequence=['#3B82F6']
-    )
+    fig_funnel = px.funnel(funnel_df, x='Count', y='Stage', color_discrete_sequence=['#3B82F6'])
     fig_funnel.update_layout(margin=dict(l=20, r=20, t=20, b=20), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
     st.plotly_chart(fig_funnel, use_container_width=True)
 
-# 2. Job Status Donut Chart
 with chart_col2:
     st.markdown("### 💼 Job Status Breakdown")
-    
     status_counts = {}
     for j in jobs:
         status = j.get("job_status", "Unknown")
@@ -153,15 +140,7 @@ with chart_col2:
     })
     
     color_map = {"Open": "#10B981", "Closed": "#EF4444", "On Hold": "#F59E0B", "Cancelled": "#64748B"}
-    
-    fig_pie = px.pie(
-        pie_df, 
-        names='Status', 
-        values='Count', 
-        hole=0.5,
-        color='Status',
-        color_discrete_map=color_map
-    )
+    fig_pie = px.pie(pie_df, names='Status', values='Count', hole=0.5, color='Status', color_discrete_map=color_map)
     fig_pie.update_layout(margin=dict(l=20, r=20, t=20, b=20), paper_bgcolor="rgba(0,0,0,0)", showlegend=True, legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
     st.plotly_chart(fig_pie, use_container_width=True)
 
@@ -172,15 +151,11 @@ st.divider()
 # ==========================
 table_col1, table_col2 = st.columns([1, 1])
 
-# 1. Recruiter Leaderboard
 with table_col1:
     st.markdown("### 🏆 Recruiter Leaderboard")
-    
     summary_data = []
     for recruiter in recruiters:
         r_name = recruiter["full_name"]
-        
-        # Candidates entered by this recruiter
         r_candidates = [c for c in candidates if c.get("created_by_name") == r_name]
         
         summary_data.append({
@@ -200,11 +175,10 @@ with table_col1:
         hide_index=True,
         column_config={
             "Recruiter": st.column_config.TextColumn("Recruiter Name", width="medium"),
-            "Sourced": st.column_config.NumberColumn("Candidates Sourced", help="Total candidates added to ATS"),
+            "Sourced": st.column_config.NumberColumn("Candidates Sourced"),
             "Interviews": st.column_config.NumberColumn("Interviews Logged"),
             "Hires": st.column_config.ProgressColumn(
                 "Total Hires",
-                help="Candidates who successfully joined",
                 format="%d",
                 min_value=0,
                 max_value=max(summary_df["Hires"].max(), 1) if not summary_df.empty else 10
@@ -212,19 +186,15 @@ with table_col1:
         }
     )
 
-# 2. Active Jobs Pipeline
 with table_col2:
     st.markdown("### 🚀 Active Jobs Pipeline")
-    
     job_summary = []
     for job in jobs:
         if job.get("job_status") != "Open":
-            continue # Only show open jobs in the pipeline table
+            continue
             
         j_id = job["job_id"]
         openings = int(job.get("openings", 1))
-        
-        # Count candidates for this job
         job_cands = [c for c in candidates if c.get("job_id") == j_id]
         joined_count = len([c for c in job_cands if c.get("current_stage") == "Joined"])
         
@@ -251,15 +221,9 @@ with table_col2:
         column_config={
             "Job": st.column_config.TextColumn("Job Requirement", width="medium"),
             "Company": st.column_config.TextColumn("Company"),
-            "Candidates": st.column_config.NumberColumn("Pipeline", help="Total candidates in flow"),
+            "Candidates": st.column_config.NumberColumn("Pipeline"),
             "Openings": st.column_config.NumberColumn("Target"),
             "Joined": st.column_config.NumberColumn("Hired"),
-            "Fill Rate": st.column_config.ProgressColumn(
-                "Fill Rate %",
-                help="Percentage of openings filled",
-                format="%d%%",
-                min_value=0,
-                max_value=100
-            )
+            "Fill Rate": st.column_config.ProgressColumn("Fill Rate %", format="%d%%", min_value=0, max_value=100)
         }
     )
