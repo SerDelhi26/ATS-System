@@ -945,6 +945,22 @@ with left_col:
                 ]
             )
 
+            # Build duplicate check conditions dynamically to avoid matching empty strings
+            or_conditions = []
+            
+            if email.strip():
+                or_conditions.append(f"email.eq.{email.strip().lower()}")
+                
+            if mobile_no.strip():
+                or_conditions.append(f"mobile_no.eq.{mobile_no.strip()}")
+                or_conditions.append(f"alternate_mobile.eq.{mobile_no.strip()}")
+                
+            if alternate_mobile.strip():
+                or_conditions.append(f"mobile_no.eq.{alternate_mobile.strip()}")
+                or_conditions.append(f"alternate_mobile.eq.{alternate_mobile.strip()}")
+
+            or_string = ",".join(or_conditions)
+
             duplicate_candidate = (
                 supabase
                 .table(
@@ -961,11 +977,7 @@ with left_col:
                     selected_job_record["job_id"]
                 )
                 .or_(
-                    f"email.eq.{email.strip().lower()},"
-                    f"mobile_no.eq.{mobile_no.strip()},"
-                    f"alternate_mobile.eq.{mobile_no.strip()},"
-                    f"mobile_no.eq.{alternate_mobile.strip()},"
-                    f"alternate_mobile.eq.{alternate_mobile.strip()}"
+                    or_string
                 )
                 .execute()
             )
