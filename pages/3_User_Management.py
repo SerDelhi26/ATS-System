@@ -58,7 +58,8 @@ if "reset_user_id" not in st.session_state:
 with st.sidebar:
 
     show_logout()
-
+    show_job_notifications()
+    
 st.markdown(
     "# 👥 ATS User Management"
 )
