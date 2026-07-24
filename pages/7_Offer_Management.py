@@ -40,7 +40,7 @@ st.markdown(
 # FUNCTIONS
 # ==========================
 
-@st.cache_data(ttl=300)
+# NO CACHE - Always fetches live data so it reacts to Interview Management instantly!
 def get_candidates_for_offer():
 
     return (
@@ -56,21 +56,12 @@ def get_candidates_for_offer():
             current_stage
             """
         )
-        .in_(
-            "current_stage",
-            [
-                "Selected",
-                "Offer",
-                "Joined",
-                "Rejected"
-            ]
-        )
         .execute()
         .data
     )
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=3600)
 def get_job_titles():
 
     return (
@@ -111,8 +102,7 @@ def get_jobs():
         .data
     )
 
-
-@st.cache_data(ttl=300)
+# NO CACHE - Always fetches live data for the right-hand grid!
 def get_candidate_lookup():
 
     return (
@@ -123,7 +113,8 @@ def get_candidate_lookup():
             candidate_id,
             candidate_reference_no,
             first_name,
-            last_name
+            last_name,
+            current_stage
             """
         )
         .execute()
@@ -310,15 +301,19 @@ with left_col:
     )
 
     raw_candidates = get_candidates_for_offer()
-
-    # Hide candidates who have already Joined or Rejected, unless we are editing them
+    
+    # Filter for Dropdown: Only show "Selected" and "Offer" candidates when scheduling new offers
     if not editing:
         candidates = [
             c for c in raw_candidates 
             if c.get("current_stage") in ["Selected", "Offer"]
         ]
     else:
-        candidates = raw_candidates
+        # Include all relevant past stages in Edit Mode so the dropdown populates properly
+        candidates = [
+            c for c in raw_candidates 
+            if c.get("current_stage") in ["Selected", "Offer", "Joined", "Rejected"]
+        ]
 
     candidate_lookup = {}
 
@@ -404,7 +399,7 @@ with left_col:
             )
         )
 
-    # NO KEY HERE - This allows the job text input to update live!
+    # NO KEY HERE: This allows the Job field to update instantly when candidate changes
     st.text_input(
         "Job",
         value=selected_job_display,
@@ -429,16 +424,17 @@ with left_col:
         key=get_key("offered_ctc")
     )
 
-    default_join_date = None
+    # Date parsing logic to allow None (blank placeholder) by default
+    default_date = None
     if editing and offer.get("joining_date"):
         try:
-            default_join_date = datetime.strptime(str(offer["joining_date"]), "%Y-%m-%d").date()
+            default_date = datetime.strptime(str(offer["joining_date"]), "%Y-%m-%d").date()
         except:
-            default_join_date = None
+            default_date = None
 
     joining_date = st.date_input(
         "Joining Date *",
-        value=default_join_date,
+        value=default_date,
         key=get_key("joining_date")
     )
 
@@ -492,11 +488,9 @@ with left_col:
         )
 
     else:
-        
-        btn_label = "Update Offer Details" if offer_status in ["Offer Accepted", "Joined", "Offer Rejected", "No Show"] else "Save Offer"
 
         update_clicked = st.button(
-            btn_label,
+            "Save Offer",
             use_container_width=True
         )
 
@@ -531,9 +525,9 @@ with left_col:
             validation_errors.append(
                 "Please enter Offered CTC."
             )
-
-        if not joining_date:
-
+            
+        if joining_date is None:
+            
             validation_errors.append(
                 "Please select a Joining Date."
             )
@@ -608,9 +602,6 @@ with left_col:
                         offer_status
                     )
 
-                    # Performance Fix 1: Specific cache clear instead of global clear
-                    get_candidates_for_offer.clear()
-
                     st.success(
                         "Offer Updated Successfully."
                     )
@@ -635,13 +626,11 @@ with left_col:
                         offer_status
                     )
 
-                    # Performance Fix 1: Specific cache clear instead of global clear
-                    get_candidates_for_offer.clear()
-
                     st.success(
                         "Offer Saved Successfully."
                     )
                 
+                # Advance Reset Tracker to clean the form
                 st.session_state.form_reset_offer += 1
                 st.rerun()
 
@@ -665,7 +654,7 @@ with right_col:
     # OFFER DATA
     # --------------------------
 
-    # Performance Fix 2: Limit the database query to 500 records to prevent RAM overload
+    # Limit the database query to 500 records to prevent RAM overload
     result = (
         supabase
         .table("offer_management")
@@ -798,7 +787,7 @@ with right_col:
 
     if offers:
         
-        # Performance Fix 3: Limit UI rendering to 25 items to stop Streamlit from freezing
+        # Limit UI rendering to 25 items to stop Streamlit from freezing
         display_offers = offers[:25]
         if len(offers) > 25:
             st.caption(f"⚠️ Showing top 25 of {len(offers)} results to maintain performance. Use the search bar to find specific records.")
