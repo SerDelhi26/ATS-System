@@ -60,14 +60,13 @@ def normalize_phone(phone):
     return digits[-10:] if len(digits) >= 10 else digits
 
 
-@st.cache_data(ttl=300)
+# REMOVED @st.cache_data SO ASSIGNED JOBS SHOW UP INSTANTLY
 def get_jobs_for_user(
     user_id,
     user_role
 ):
 
     if user_role == "Admin":
-
         return (
             supabase
             .table("job_management")
@@ -79,10 +78,7 @@ def get_jobs_for_user(
                 job_status
                 """
             )
-            .eq(
-                "job_status",
-                "Open"
-            )
+            .eq("job_status", "Open")
             .execute()
             .data
         )
@@ -90,11 +86,8 @@ def get_jobs_for_user(
     assignments = (
         supabase
         .table("job_assignment")
-        .select("*")
-        .eq(
-            "user_id",
-            user_id
-        )
+        .select("job_id")
+        .eq("user_id", user_id)
         .execute()
     )
 
@@ -104,10 +97,10 @@ def get_jobs_for_user(
     ]
 
     if not assigned_job_ids:
-
         return []
 
-    jobs = (
+    # Optimized direct query for only the assigned jobs
+    return (
         supabase
         .table("job_management")
         .select(
@@ -118,18 +111,12 @@ def get_jobs_for_user(
             job_status
             """
         )
-        .eq(
-            "job_status",
-            "Open"
-        )
+        .in_("job_id", assigned_job_ids)
+        .eq("job_status", "Open")
         .execute()
+        .data
     )
 
-    return [
-        job
-        for job in jobs.data
-        if job["job_id"] in assigned_job_ids
-    ]
 
 def upload_resume(
     uploaded_file,
@@ -986,7 +973,6 @@ with left_col:
             norm_last = last_name.strip().lower()
 
             # Build dynamic OR conditions
-            # FIXED: Removed double quotes. Supabase searches for literal quotes if they are included.
             or_conditions = []
             
             if norm_email:
@@ -1005,7 +991,6 @@ with left_col:
 
             or_string = ",".join(or_conditions)
 
-            # FIXED: Removed multi-line whitespace which crashes the PostgREST select parser
             duplicates = (
                 supabase
                 .table(
