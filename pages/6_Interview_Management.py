@@ -43,10 +43,8 @@ st.markdown(
 # FUNCTIONS
 # ==========================
 
-@st.cache_data(ttl=300)
+# NO CACHE - We must fetch live data so the grid instantly locks when HR creates an Offer!
 def get_candidates_for_interview():
-    # Fetch ALL candidates into memory (Removed the DB filter)
-    # We filter them dynamically in Python so the Dropdown never breaks in Edit Mode.
     return (
         supabase
         .table("candidate_management")
@@ -107,7 +105,7 @@ def get_jobs():
         .data
     )
 
-@st.cache_data(ttl=300)
+# NO CACHE - Ensure the right-hand grid always has the live current_stage for locking
 def get_candidate_lookup():
 
     return (
@@ -800,10 +798,6 @@ with left_col:
                         selected_candidate_id
                     )
 
-                    # Specific cache clear
-                    get_candidates_for_interview.clear()
-                    get_candidate_lookup.clear()
-
                     st.success(
                         "Interview Updated Successfully."
                     )
@@ -826,10 +820,6 @@ with left_col:
                     update_candidate_stage(
                         selected_candidate_id
                     )
-
-                    # Specific cache clear
-                    get_candidates_for_interview.clear()
-                    get_candidate_lookup.clear()
 
                     st.success(
                         "Interview Scheduled Successfully."
