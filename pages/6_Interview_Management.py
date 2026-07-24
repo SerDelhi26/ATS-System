@@ -606,9 +606,16 @@ with left_col:
         )
 
     else:
+        
+        # Dynamic button label based on interview status
+        btn_label = (
+            "Save Interview" 
+            if interview_status in ["Completed", "Selected", "Rejected"] 
+            else "Schedule Interview"
+        )
 
         update_clicked = st.button(
-            "Schedule Interview",
+            btn_label,
             use_container_width=True
         )
 
