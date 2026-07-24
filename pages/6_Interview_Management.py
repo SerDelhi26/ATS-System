@@ -54,12 +54,12 @@ def get_candidates_for_interview():
             first_name,
             last_name,
             job_id,
-            current_stage
+            current_stage,
+            candidate_status
             """
         )
-        .in_(
-            "current_stage",
-            ["Shortlisted", "Interview"]
+        .or_(
+            "candidate_status.eq.Shortlisted,current_stage.eq.Interview,current_stage.eq.Shortlisted"
         )
         .execute()
         .data
