@@ -110,6 +110,7 @@ def get_jobs():
 @st.cache_data(ttl=300)
 def get_candidate_lookup():
 
+    # SUGGESTION 3: Fetch 'current_stage' so we can lock past interview rounds
     return (
         supabase
         .table("candidate_management")
@@ -118,7 +119,8 @@ def get_candidate_lookup():
             candidate_id,
             candidate_reference_no,
             first_name,
-            last_name
+            last_name,
+            current_stage
             """
         )
         .execute()
@@ -915,6 +917,12 @@ with right_col:
 
     }
 
+    # Tracking Candidate Stages for Locking rows
+    candidate_stage_lookup = {
+        candidate["candidate_id"]: candidate.get("current_stage")
+        for candidate in all_candidates
+    }
+
     # --------------------------
     # STATUS FILTER
     # --------------------------
@@ -1122,16 +1130,26 @@ with right_col:
                 unsafe_allow_html=True
             )
 
-            if cols[6].button(
-                "✏️",
-                key=f"edit_{item['interview_id']}"
-            ):
+            # --- PREVIOUS ROUND LOCKING ENGINE ---
+            c_stage = candidate_stage_lookup.get(item["candidate_id"])
+            
+            # If candidate is in a terminal stage, but this specific row is NOT Selected or Rejected,
+            # it means this is a "previous" round and must be locked.
+            is_locked = c_stage in ["Selected", "Rejected", "Offer", "Joined"] and status not in ["Selected", "Rejected"]
 
-                st.session_state.edit_interview_id = (
-                    item["interview_id"]
-                )
+            if is_locked:
+                cols[6].markdown("<div style='margin-top:2px;'>🔒</div>", unsafe_allow_html=True)
+            else:
+                if cols[6].button(
+                    "✏️",
+                    key=f"edit_{item['interview_id']}"
+                ):
 
-                st.rerun()
+                    st.session_state.edit_interview_id = (
+                        item["interview_id"]
+                    )
+
+                    st.rerun()
 
     else:
 
