@@ -3,7 +3,7 @@ import pandas as pd
 from io import BytesIO
 from datetime import date, datetime
 from db import supabase
-from common import show_logout
+from common import show_logout, show_job_notifications
 from theme import apply_theme
 
 # ==========================
@@ -25,6 +25,7 @@ apply_theme()
 
 with st.sidebar:
     show_logout()
+    show_job_notifications()
 
 st.markdown("# 📊 ATS Master Report")
 

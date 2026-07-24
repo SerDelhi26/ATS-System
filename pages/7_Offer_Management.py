@@ -1,6 +1,6 @@
 import streamlit as st
 from db import supabase
-from common import show_logout
+from common import show_logout, show_job_notifications
 from datetime import date, datetime
 from theme import apply_theme
 
@@ -31,6 +31,7 @@ apply_theme()
 with st.sidebar:
 
     show_logout()
+    show_job_notifications()
 
 st.markdown(
     "# 📄 ATS Offer Management"

@@ -3,7 +3,7 @@ import pandas as pd
 import re
 from db import supabase
 from datetime import date
-from common import show_logout
+from common import show_logout, show_job_notifications
 import bcrypt
 from theme import apply_theme
 

@@ -1,5 +1,5 @@
 import streamlit as st
-from common import show_logout
+from common import show_logout, show_job_notifications
 from db import supabase
 import pandas as pd
 import plotly.express as px
@@ -57,6 +57,7 @@ apply_theme()
 
 with st.sidebar:
     show_logout()
+    show_job_notifications()
 
 st.markdown("# 📊 ATS Analytics Dashboard")
 st.caption(f"Welcome back, **{st.session_state.user_name}** ({st.session_state.user_role})")
