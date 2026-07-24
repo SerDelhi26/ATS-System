@@ -26,10 +26,65 @@ if "password_reset_mode" not in st.session_state:
     st.session_state.password_reset_mode = False
 
 # ==========================
-# AUTHENTICATION & ROUTING
+# ROUTING & VIEWS (LOGGED OUT)
 # ==========================
 if not st.session_state.logged_in:
-    # Render Login Form UI directly without conflicting navigation loops
+    
+    # VIEW 1: PASSWORD RESET MODE (Handles reset directly on login screen)
+    if st.session_state.password_reset_mode:
+        st.markdown("# 🔑 Change Password")
+        st.info("Enter your current password and choose a new password.")
+        
+        with st.form("reset_form"):
+            email = st.text_input("Email")
+            current_password = st.text_input("Current Password", type="password")
+            new_password = st.text_input("New Password", type="password")
+            confirm_password = st.text_input("Confirm New Password", type="password")
+            
+            col1, col2 = st.columns(2)
+            submit_change = col1.form_submit_button("🔑 Change Password", use_container_width=True)
+            back_btn = col2.form_submit_button("↩ Back to Login", use_container_width=True)
+            
+        if back_btn:
+            st.session_state.password_reset_mode = False
+            st.rerun()
+            
+        if submit_change:
+            if not email.strip() or not current_password.strip() or not new_password.strip():
+                st.error("All fields are required.")
+            elif new_password != confirm_password:
+                st.error("Passwords do not match.")
+            elif len(new_password) < 8:
+                st.error("Password must contain at least 8 characters.")
+            else:
+                try:
+                    response = (
+                        supabase
+                        .table("users")
+                        .select("user_id, password_hash, status")
+                        .eq("email", email.strip())
+                        .eq("status", "Active")
+                        .execute()
+                    )
+                    
+                    if not response.data:
+                        st.error("User not found or inactive.")
+                    else:
+                        user = response.data[0]
+                        if not bcrypt.checkpw(current_password.encode(), user["password_hash"].encode()):
+                            st.error("Current password is incorrect.")
+                        else:
+                            hashed_password = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
+                            supabase.table("users").update({"password_hash": hashed_password}).eq("user_id", user["user_id"]).execute()
+                            st.success("Password changed successfully. Please log in.")
+                            st.session_state.password_reset_mode = False
+                            st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
+                    
+        st.stop()
+
+    # VIEW 2: LOGIN FORM
     st.markdown("# 🔐 Welcome to ATS Login")
     st.markdown("Please sign in to continue.")
     
@@ -43,7 +98,7 @@ if not st.session_state.logged_in:
 
     if forgot_password:
         st.session_state.password_reset_mode = True
-        st.switch_page("pages/1_Change_Password.py")
+        st.rerun()
 
     if submit_login:
         if not email.strip() or not password.strip():
@@ -76,11 +131,12 @@ if not st.session_state.logged_in:
             except Exception as e:
                 st.error(f"Login error: {str(e)}")
                 
-    # Stop execution here so the sidebar and dashboard pages don't render while logged out
     st.stop()
 
 else:
-    # User is logged in: Build dynamic page list based on role
+    # ==========================
+    # LOGGED-IN NAVIGATION & PAGES
+    # ==========================
     pages_list = [
         st.Page("pages/2_Dashboard.py", title="Dashboard", icon="📊"),
         st.Page("pages/5_Candidate_Management.py", title="Candidate Management", icon="👤"),
@@ -89,14 +145,13 @@ else:
         st.Page("pages/8_Report_Management.py", title="Report Management", icon="📈"),
     ]
 
-    # Conditionally insert Admin-only pages if user role is Admin
+    # Conditionally insert Admin-only pages
     if st.session_state.user_role == "Admin":
         pages_list.insert(1, st.Page("pages/3_User_Management.py", title="User Management", icon="👥"))
         pages_list.insert(2, st.Page("pages/4_Job_Management.py", title="Job Management", icon="💼"))
 
-    # Add Change Password page for everyone
+    # Add Change Password page for when users are logged in and want to use the sidebar page
     pages_list.append(st.Page("pages/1_Change_Password.py", title="Change Password", icon="🔑"))
 
-    # Render sidebar navigation with role-filtered pages
     pg = st.navigation(pages_list, position="sidebar")
     pg.run()
