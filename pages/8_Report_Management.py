@@ -9,7 +9,6 @@ from theme import apply_theme
 # ==========================
 # LOGIN CHECK
 # ==========================
-
 if not st.session_state.get("logged_in", False):
     st.switch_page("Home.py")
     st.stop()
@@ -17,7 +16,6 @@ if not st.session_state.get("logged_in", False):
 # ==========================
 # PAGE CONFIG
 # ==========================
-
 st.set_page_config(
     page_title="ATS Reports",
     layout="wide"
@@ -31,16 +29,17 @@ with st.sidebar:
 st.markdown("# 📊 ATS Master Report")
 
 # ==========================
-# FUNCTIONS
+# OPTIMIZED FUNCTIONS (Targeted Columns)
 # ==========================
 @st.cache_data(ttl=60)
 def get_report_data():
     try:
-        candidates = supabase.table("candidate_management").select("*").execute().data
+        # Fetch only necessary columns to keep network payloads lightweight
+        candidates = supabase.table("candidate_management").select("candidate_id, candidate_reference_no, first_name, last_name, job_id, created_by_name, email, mobile_no, experience_years, experience_months, current_stage, created_on").execute().data
         jobs = supabase.table("job_management").select("job_id, job_reference_no, job_title_id").execute().data
-        job_titles = supabase.table("job_title_master").select("*").execute().data
-        interviews = supabase.table("interview_management").select("*").execute().data
-        offers = supabase.table("offer_management").select("*").execute().data
+        job_titles = supabase.table("job_title_master").select("job_title_id, job_title_name").execute().data
+        interviews = supabase.table("interview_management").select("candidate_id, interview_round, interview_status, interview_date").execute().data
+        offers = supabase.table("offer_management").select("candidate_id, offer_status, offered_ctc, joining_date").execute().data
         
         return candidates, jobs, job_titles, interviews, offers
     except Exception as e:
@@ -48,7 +47,6 @@ def get_report_data():
         return [], [], [], [], []
 
 def parse_date(date_str):
-    """Safely converts Supabase timestamps to clean YYYY-MM-DD format."""
     if not date_str:
         return None
     try:
@@ -63,7 +61,6 @@ def parse_date(date_str):
 # ==========================
 candidates, jobs, job_titles, interviews, offers = get_report_data()
 
-# Show total records in DB for debugging
 if candidates:
     st.caption(f"Total candidates in database: {len(candidates)}")
 else:
@@ -82,7 +79,7 @@ for job in jobs:
     job_lookup[job["job_id"]] = label
     job_options.append(label)
 
-# Group interviews by candidate_id (handles multiple rounds per candidate)
+# Group interviews by candidate_id
 interview_map = {}
 for inv in interviews:
     cid = inv.get("candidate_id")
@@ -136,32 +133,24 @@ report_rows = []
 
 for candidate in candidates:
     candidate_id = candidate.get("candidate_id")
-    
-    # 1. Parse Date
     parsed_date = parse_date(candidate.get("created_on", ""))
     
-    # Date Filtering Logic
     if use_date_filter:
         if not parsed_date or parsed_date < from_date or parsed_date > to_date:
             continue
 
-    # 2. Recruiter Filter
     if recruiter_filter != "All Recruiters" and candidate.get("created_by_name") != recruiter_filter:
         continue
 
-    # 3. Status Filter
     master_stage = candidate.get("current_stage", "Unknown")
     if status_filter != "All Stages" and master_stage != status_filter:
         continue
 
-    # 4. Job Filter
     job_label = job_lookup.get(candidate.get("job_id"), "Unknown Job")
     if job_filter != "All Jobs" and job_label != job_filter:
         continue
 
-    # ==========================
-    # COMPILE INTERVIEW DETAILS
-    # ==========================
+    # Compile Interview Details
     cand_interviews = interview_map.get(candidate_id, [])
     interview_history_list = []
     for inv in cand_interviews:
@@ -172,9 +161,7 @@ for candidate in candidates:
     
     interview_history_str = " | ".join(interview_history_list) if interview_history_list else "No Interviews"
 
-    # ==========================
-    # COMPILE OFFER DETAILS
-    # ==========================
+    # Compile Offer Details
     cand_offer = offer_map.get(candidate_id)
     if cand_offer:
         offer_status = cand_offer.get("offer_status", "N/A")
@@ -184,7 +171,6 @@ for candidate in candidates:
     else:
         offer_details_str = "No Offer"
 
-    # Build the comprehensive row
     row = {
         "Date Added": parsed_date.strftime("%Y-%m-%d") if parsed_date else "N/A",
         "Candidate No": candidate.get("candidate_reference_no", ""),
@@ -214,6 +200,8 @@ with colB:
         output = BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
             report_df.to_excel(writer, index=False, sheet_name="ATS Report")
+        
+        output.seek(0)
         excel_data = output.getvalue()
         
         st.markdown("<div style='margin-top: 25px;'></div>", unsafe_allow_html=True)
