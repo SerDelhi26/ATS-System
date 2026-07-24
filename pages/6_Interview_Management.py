@@ -335,7 +335,18 @@ with left_col:
         "## 📅 Schedule Interview"
     )
 
-    candidates = get_candidates_for_interview()
+    raw_candidates = get_candidates_for_interview()
+
+    # Hide candidates from the dropdown if their flow is over, 
+    # UNLESS we are specifically editing their past record.
+    if not editing:
+        terminal_stages = ["Selected", "Rejected", "Offer", "Joined"]
+        candidates = [
+            c for c in raw_candidates 
+            if c.get("current_stage") not in terminal_stages
+        ]
+    else:
+        candidates = raw_candidates
 
     candidate_lookup = {}
 
@@ -664,6 +675,49 @@ with left_col:
                 st.error(error)
 
         else:
+
+            # ==========================
+            # TERMINAL STATE VALIDATION
+            # ==========================
+            existing_interviews_response = (
+                supabase
+                .table("interview_management")
+                .select("interview_id, interview_status")
+                .eq("candidate_id", selected_candidate_id)
+                .execute()
+            )
+            
+            existing_interviews = existing_interviews_response.data
+            
+            already_selected = False
+            already_rejected = False
+            
+            for ei in existing_interviews:
+                # Skip checking against the exact record currently being edited
+                if editing and ei["interview_id"] == interview["interview_id"]:
+                    continue 
+                    
+                if ei["interview_status"] == "Selected":
+                    already_selected = True
+                elif ei["interview_status"] == "Rejected":
+                    already_rejected = True
+                    
+            if not editing and already_selected:
+                st.error("🚨 This candidate has already been 'Selected'. The interview flow is complete, and no new rounds can be added.")
+                st.stop()
+                
+            if not editing and already_rejected:
+                st.error("🚨 This candidate has been 'Rejected' in a previous round. The interview flow is closed.")
+                st.stop()
+                
+            if interview_status == "Selected" and already_selected:
+                st.error("🚨 This candidate already has a 'Selected' round on record. A candidate cannot have multiple 'Selected' statuses.")
+                st.stop()
+                
+            if interview_status == "Rejected" and already_rejected:
+                st.error("🚨 This candidate already has a 'Rejected' round on record.")
+                st.stop()
+
 
             interview_data = {
 
