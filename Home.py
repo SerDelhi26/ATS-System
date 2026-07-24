@@ -31,7 +31,6 @@ if "password_reset_mode" not in st.session_state:
 def login_view():
     """Encapsulates the login and password reset UI to work seamlessly with the router."""
     
-    # VIEW 1: PASSWORD RESET MODE
     if st.session_state.password_reset_mode:
         st.markdown("# 🔑 Change Password")
         st.info("Enter your current password and choose a new password.")
@@ -83,9 +82,8 @@ def login_view():
                 except Exception as e:
                     st.error(f"Error: {str(e)}")
         
-        return # Stop execution of the login form if in reset mode
+        return
 
-    # VIEW 2: STANDARD LOGIN FORM
     st.markdown("# 🔐 Welcome to ATS Login")
     st.markdown("Please sign in to continue.")
     
@@ -136,26 +134,24 @@ def login_view():
 # ROUTING & NAVIGATION
 # ==========================
 if not st.session_state.logged_in:
-    # Explicitly enforce a hidden navigation menu pointing to the function above
     pg = st.navigation([st.Page(login_view, title="Login", icon="🔐")], position="hidden")
     pg.run()
 
 else:
-    # User is logged in: Build dynamic page list based on role
+    # Build dynamic page list: Job Management is now available to ALL users
     pages_list = [
         st.Page("views/2_Dashboard.py", title="Dashboard", icon="📊"),
+        st.Page("views/4_Job_Management.py", title="Job Management", icon="💼"),
         st.Page("views/5_Candidate_Management.py", title="Candidate Management", icon="👤"),
         st.Page("views/6_Interview_Management.py", title="Interview Management", icon="📅"),
         st.Page("views/7_Offer_Management.py", title="Offer Management", icon="📄"),
         st.Page("views/8_Report_Management.py", title="Report Management", icon="📈"),
     ]
 
-    # Conditionally insert Admin-only pages
+    # Only Admins get User Management
     if st.session_state.user_role == "Admin":
         pages_list.insert(1, st.Page("views/3_User_Management.py", title="User Management", icon="👥"))
-        pages_list.insert(2, st.Page("views/4_Job_Management.py", title="Job Management", icon="💼"))
 
-    # Add Change Password page for when logged in
     pages_list.append(st.Page("views/1_Change_Password.py", title="Change Password", icon="🔑"))
 
     pg = st.navigation(pages_list, position="sidebar")
