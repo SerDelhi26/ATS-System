@@ -232,6 +232,10 @@ if "edit_interview_id" not in st.session_state:
 
     st.session_state.edit_interview_id = None
 
+if "form_reset_interview" not in st.session_state:
+
+    st.session_state.form_reset_interview = 0
+
 
 # ==========================
 # EDIT MODE
@@ -296,6 +300,12 @@ left_col, right_col = st.columns(
 
 with left_col:
 
+    # Helper function to generate safe, dynamic keys for resetting
+    def get_key(base_name):
+        if editing:
+            return f"{base_name}_{interview['interview_id']}"
+        return f"{base_name}_new_{st.session_state.form_reset_interview}"
+
     st.markdown(
         "## ✏️ Edit Interview"
         if editing
@@ -349,7 +359,8 @@ with left_col:
         candidate_options,
         index=candidate_options.index(
             selected_candidate_label
-        )
+        ),
+        key=get_key("candidate")
     )
 
     selected_job_display = ""
@@ -391,7 +402,8 @@ with left_col:
     st.text_input(
         "Job",
         value=selected_job_display,
-        disabled=True
+        disabled=True,
+        key=get_key("job_display")
     )
 
     st.markdown(
@@ -405,16 +417,20 @@ with left_col:
             if editing
             else ""
         ),
-        placeholder="-- Enter Round --"
+        placeholder="-- Enter Round --",
+        key=get_key("round")
     )
 
     interview_date = st.date_input(
         "Interview Date *",
         value=(
-            interview["interview_date"]
+            datetime.strptime(interview["interview_date"], "%Y-%m-%d").date()
+            if editing and isinstance(interview["interview_date"], str)
+            else interview["interview_date"]
             if editing
             else date.today()
-        )
+        ),
+        key=get_key("date")
     )
 
     time_options = [
@@ -469,8 +485,9 @@ with left_col:
             and str(interview["interview_time"])[:5]
             in time_options
             else 0
-        )
-)
+        ),
+        key=get_key("time")
+    )
 
     interviewer_name = st.text_input(
         "Interviewer Name",
@@ -478,7 +495,8 @@ with left_col:
             interview["interviewer_name"]
             if editing
             else ""
-        )
+        ),
+        key=get_key("interviewer")
     )
 
     interview_mode = st.selectbox(
@@ -492,7 +510,8 @@ with left_col:
             and interview["interview_mode"]
             in interview_mode_options
             else 0
-        )
+        ),
+        key=get_key("mode")
     )
 
     interview_status = st.selectbox(
@@ -506,7 +525,8 @@ with left_col:
             and interview["interview_status"]
             in interview_status_options
             else 0
-        )
+        ),
+        key=get_key("status")
     )
 
     st.markdown(
@@ -521,7 +541,8 @@ with left_col:
             and interview["feedback"]
             else ""
         ),
-        height=100
+        height=100,
+        key=get_key("feedback")
     )
 
     remarks = st.text_area(
@@ -532,7 +553,8 @@ with left_col:
             and interview["remarks"]
             else ""
         ),
-        height=100
+        height=100,
+        key=get_key("remarks")
     )
 
     # ----------------------
@@ -565,6 +587,8 @@ with left_col:
     if cancel_clicked:
 
         st.session_state.edit_interview_id = None
+
+        st.session_state.form_reset_interview += 1
 
         st.rerun()
 
@@ -718,6 +742,8 @@ with left_col:
                         "Interview Scheduled Successfully."
                     )
 
+                st.session_state.form_reset_interview += 1
+                
                 st.rerun()
 
             except Exception as e:
