@@ -45,8 +45,8 @@ st.markdown(
 
 @st.cache_data(ttl=300)
 def get_candidates_for_interview():
-    # Fetch all relevant candidates into memory
-    # We will filter them dynamically in Python based on whether we are Scheduling or Editing
+    # Fetch ALL candidates into memory (Removed the DB filter)
+    # We filter them dynamically in Python so the Dropdown never breaks in Edit Mode.
     return (
         supabase
         .table("candidate_management")
@@ -128,8 +128,7 @@ def get_candidate_lookup():
 
 
 def update_candidate_stage(
-    candidate_id,
-    interview_status=None
+    candidate_id
 ):
     
     # 1. Fetch current stage from candidate to ensure we don't downgrade an Offer/Joined
@@ -194,7 +193,6 @@ def get_interview_by_id(
     )
 
     return result.data
-
 
 
 # ==========================
@@ -274,7 +272,6 @@ if st.session_state.edit_interview_id:
         st.rerun()
 
 
-
 # ==========================
 # DROPDOWN VALUES
 # ==========================
@@ -328,8 +325,7 @@ with left_col:
 
     raw_candidates = get_candidates_for_interview()
 
-    # Hide candidates from the dropdown if their flow is over, 
-    # UNLESS we are specifically editing their past record.
+    # Dynamic python filtering for candidate dropdown
     if not editing:
         terminal_stages = ["Selected", "Rejected", "Offer", "Joined"]
         candidates = [
@@ -338,7 +334,7 @@ with left_col:
             and c.get("current_stage") not in terminal_stages
         ]
     else:
-        # In edit mode, include candidates who are already Selected/Rejected so the dropdown works!
+        # In edit mode, include everyone so the dropdown always populates properly
         candidates = [
             c for c in raw_candidates 
             if c.get("candidate_status") == "Shortlisted" or c.get("current_stage") in ["Interview", "Selected", "Rejected", "Offer", "Joined"]
@@ -397,6 +393,7 @@ with left_col:
     selected_job_id = None
 
     selected_candidate_id = None
+
 
     if (
         selected_candidate
@@ -1054,6 +1051,11 @@ with right_col:
 
         st.divider()
 
+        # Build a lookup of candidates who have an actual terminal interview round in the grid
+        terminal_candidates = set(
+            i["candidate_id"] for i in interviews if i["interview_status"] in ["Selected", "Rejected"]
+        )
+
         # Iterate over the sliced list instead of the full list
         for item in display_interviews:
 
@@ -1127,12 +1129,17 @@ with right_col:
                 unsafe_allow_html=True
             )
 
-            # --- PREVIOUS ROUND LOCKING ENGINE ---
+            # --- PREVIOUS ROUND LOCKING ENGINE (Auto-Healing Version) ---
             c_stage = candidate_stage_lookup.get(item["candidate_id"])
+            is_locked = False
             
-            # If candidate is in a terminal stage, but this specific row is NOT Selected or Rejected,
-            # it means this is a "previous" round and must be locked.
-            is_locked = c_stage in ["Selected", "Rejected", "Offer", "Joined"] and status not in ["Selected", "Rejected"]
+            # Rule 1: If HR has moved them to Offer/Joined, everything is permanently locked.
+            if c_stage in ["Offer", "Joined"]:
+                is_locked = True
+                
+            # Rule 2: If the candidate has an active Selected/Rejected round, lock all OTHER rounds.
+            elif item["candidate_id"] in terminal_candidates and status not in ["Selected", "Rejected"]:
+                is_locked = True
 
             if is_locked:
                 cols[6].markdown("<div style='margin-top:2px;'>🔒</div>", unsafe_allow_html=True)
