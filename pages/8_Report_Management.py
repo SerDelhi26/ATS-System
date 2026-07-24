@@ -39,19 +39,19 @@ def get_report_data():
         candidates = supabase.table("candidate_management").select("*").execute().data
         jobs = supabase.table("job_management").select("job_id, job_reference_no, job_title_id").execute().data
         job_titles = supabase.table("job_title_master").select("*").execute().data
-        offers = supabase.table("offer_management").select("candidate_id, offered_ctc").execute().data
+        interviews = supabase.table("interview_management").select("*").execute().data
+        offers = supabase.table("offer_management").select("*").execute().data
         
-        return candidates, jobs, job_titles, offers
+        return candidates, jobs, job_titles, interviews, offers
     except Exception as e:
         st.error(f"Error loading report data: {e}")
-        return [], [], [], []
+        return [], [], [], [], []
 
 def parse_date(date_str):
     """Safely converts Supabase timestamps to clean YYYY-MM-DD format."""
     if not date_str:
         return None
     try:
-        # Supabase format: '2026-07-24T10:15:30.123Z'
         clean_time = str(date_str).split(".")[0].split("+")[0].replace("Z", "")
         parsed = datetime.strptime(clean_time, "%Y-%m-%dT%H:%M:%S")
         return parsed.date()
@@ -61,7 +61,7 @@ def parse_date(date_str):
 # ==========================
 # LOAD DATA
 # ==========================
-candidates, jobs, job_titles, offers = get_report_data()
+candidates, jobs, job_titles, interviews, offers = get_report_data()
 
 # Show total records in DB for debugging
 if candidates:
@@ -70,7 +70,7 @@ else:
     st.warning("No candidate data found in the database. Please check your Supabase connection.")
 
 # ==========================
-# LOOKUPS
+# LOOKUPS & MAPPINGS
 # ==========================
 job_title_lookup = {row["job_title_id"]: row["job_title_name"] for row in job_titles}
 
@@ -82,7 +82,21 @@ for job in jobs:
     job_lookup[job["job_id"]] = label
     job_options.append(label)
 
-offer_lookup = {row["candidate_id"]: row.get("offered_ctc", "") for row in offers}
+# Group interviews by candidate_id (handles multiple rounds per candidate)
+interview_map = {}
+for inv in interviews:
+    cid = inv.get("candidate_id")
+    if cid:
+        if cid not in interview_map:
+            interview_map[cid] = []
+        interview_map[cid].append(inv)
+
+# Map offers by candidate_id
+offer_map = {}
+for off in offers:
+    cid = off.get("candidate_id")
+    if cid:
+        offer_map[cid] = off
 
 # ==========================
 # FILTERS UI
@@ -121,6 +135,7 @@ st.divider()
 report_rows = []
 
 for candidate in candidates:
+    candidate_id = candidate.get("candidate_id")
     
     # 1. Parse Date
     parsed_date = parse_date(candidate.get("created_on", ""))
@@ -144,7 +159,32 @@ for candidate in candidates:
     if job_filter != "All Jobs" and job_label != job_filter:
         continue
 
-    # Build the row
+    # ==========================
+    # COMPILE INTERVIEW DETAILS
+    # ==========================
+    cand_interviews = interview_map.get(candidate_id, [])
+    interview_history_list = []
+    for inv in cand_interviews:
+        round_name = inv.get("interview_round", "Round")
+        inv_status = inv.get("interview_status", "N/A")
+        inv_date = inv.get("interview_date", "N/A")
+        interview_history_list.append(f"{round_name}: {inv_status} ({inv_date})")
+    
+    interview_history_str = " | ".join(interview_history_list) if interview_history_list else "No Interviews"
+
+    # ==========================
+    # COMPILE OFFER DETAILS
+    # ==========================
+    cand_offer = offer_map.get(candidate_id)
+    if cand_offer:
+        offer_status = cand_offer.get("offer_status", "N/A")
+        offered_ctc = cand_offer.get("offered_ctc", "N/A")
+        joining_date = cand_offer.get("joining_date", "N/A")
+        offer_details_str = f"Status: {offer_status} | CTC: {offered_ctc} | Joining: {joining_date}"
+    else:
+        offer_details_str = "No Offer"
+
+    # Build the comprehensive row
     row = {
         "Date Added": parsed_date.strftime("%Y-%m-%d") if parsed_date else "N/A",
         "Candidate No": candidate.get("candidate_reference_no", ""),
@@ -154,7 +194,9 @@ for candidate in candidates:
         "Email": candidate.get("email", ""),
         "Mobile": candidate.get("mobile_no", ""),
         "Experience": f"{candidate.get('experience_years',0)}Y {candidate.get('experience_months',0)}M",
-        "Master Stage": master_stage
+        "Master Stage": master_stage,
+        "Interview History": interview_history_str,
+        "Offer Details": offer_details_str
     }
     report_rows.append(row)
 
