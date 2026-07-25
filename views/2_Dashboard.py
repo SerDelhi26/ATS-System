@@ -65,7 +65,7 @@ st.caption(f"Welcome back, **{st.session_state.user_name}** ({st.session_state.u
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
 # ==========================
-# DATA FETCHING (Selective Columns)
+# DATA FETCHING
 # ==========================
 def get_dashboard_data():
     jobs = supabase.table("job_management").select("job_id, job_reference_no, job_status, openings, company_id, job_title_id").execute().data
@@ -75,14 +75,16 @@ def get_dashboard_data():
     recruiters = supabase.table("users").select("user_id, full_name").eq("role", "Recruiter").execute().data
     job_titles = supabase.table("job_title_master").select("job_title_id, job_title_name").execute().data
     companies = supabase.table("company_master").select("company_id, company_name").execute().data
+    job_assignments = supabase.table("job_assignment").select("job_id, user_id").execute().data
     
-    return jobs, candidates, interviews, offers, recruiters, job_titles, companies
+    return jobs, candidates, interviews, offers, recruiters, job_titles, companies, job_assignments
 
-jobs, candidates, interviews, offers, recruiters, job_titles, companies = get_dashboard_data()
+jobs, candidates, interviews, offers, recruiters, job_titles, companies, job_assignments = get_dashboard_data()
 
 # Lookups
 job_title_lookup = {item["job_title_id"]: item["job_title_name"] for item in job_titles}
 company_lookup = {item["company_id"]: item["company_name"] for item in companies}
+offer_map = {o["candidate_id"]: o for o in offers if o.get("candidate_id")}
 
 job_lookup = {}
 job_options = ["All Jobs"]
@@ -206,89 +208,118 @@ with chart_col2:
     fig_pie.update_layout(margin=dict(l=20, r=20, t=20, b=20), paper_bgcolor="rgba(0,0,0,0)", showlegend=True, legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
     st.plotly_chart(fig_pie, use_container_width=True)
 
+# ==========================
+# USER WORKPLAN SECTION
+# ==========================
 st.divider()
+st.markdown("### 📋 User Workplan")
+st.caption("Active job requirements assigned to you and their current candidate pipeline breakdown.")
 
-# ==========================
-# TABLES ROW
-# ==========================
-table_col1, table_col2 = st.columns([1, 1])
+current_user_id = st.session_state.get("user_id")
+current_user_role = st.session_state.get("user_role")
 
-with table_col1:
-    st.markdown("### 🏆 Recruiter Leaderboard")
-    summary_data = []
-    for recruiter in recruiters:
-        r_name = recruiter["full_name"]
-        r_candidates = [c for c in filtered_candidates if c.get("created_by_name") == r_name]
+# Determine job assignments based on role
+assigned_job_ids = [a["job_id"] for a in job_assignments if a.get("user_id") == current_user_id]
+
+if current_user_role == "Admin":
+    workplan_jobs = [j for j in jobs if j.get("job_status") == "Open"]
+else:
+    workplan_jobs = [j for j in jobs if j.get("job_status") == "Open" and j.get("job_id") in assigned_job_ids]
+
+workplan_data = []
+
+for job in workplan_jobs:
+    j_id = job["job_id"]
+    title_name = job_title_lookup.get(job.get("job_title_id"), "Unknown Title")
+    company_name = company_lookup.get(job.get("company_id"), "Unknown Company")
+    job_label = f"{job.get('job_reference_no', '')} | {title_name}"
+
+    # Filter candidate data per job
+    job_cands = [c for c in filtered_candidates if c.get("job_id") == j_id]
+
+    applied_cnt = len(job_cands)
+    shortlisted_cnt = 0
+    interview_cnt = 0
+    offer_released_cnt = 0
+    offer_accepted_cnt = 0
+    offer_rejected_cnt = 0
+    joined_cnt = 0
+    no_show_cnt = 0
+
+    latest_date = None
+
+    for c in job_cands:
+        c_id = c.get("candidate_id")
+        stage = c.get("current_stage")
+        status = c.get("candidate_status")
         
-        summary_data.append({
-            "Recruiter": r_name,
-            "Sourced": len(r_candidates),
-            "Interviews": len([i for i in filtered_interviews if i.get("created_by_name") == r_name]),
-            "Hires": len([c for c in r_candidates if c.get("current_stage") == "Joined"])
-        })
+        cand_offer = offer_map.get(c_id, {})
+        off_status = cand_offer.get("offer_status") if cand_offer else None
+
+        # Stage aggregations
+        if stage == "Shortlisted" or status == "Shortlisted":
+            shortlisted_cnt += 1
+
+        if stage == "Interview":
+            interview_cnt += 1
+
+        # Offer & Joining aggregations
+        effective_status = off_status or status
         
-    summary_df = pd.DataFrame(summary_data)
-    if not summary_df.empty:
-        summary_df = summary_df.sort_values(by=["Hires", "Sourced"], ascending=[False, False])
-        
+        if effective_status == "Offer Released" or (stage == "Offer" and not off_status):
+            offer_released_cnt += 1
+        elif effective_status == "Offer Accepted":
+            offer_accepted_cnt += 1
+        elif effective_status == "Offer Rejected":
+            offer_rejected_cnt += 1
+        elif effective_status in ["Joined", "Hired"] or stage == "Joined":
+            joined_cnt += 1
+        elif effective_status == "No Show":
+            no_show_cnt += 1
+
+        # Track last activity date
+        c_date = parse_date(c.get("created_on", ""))
+        if c_date:
+            if not latest_date or c_date > latest_date:
+                latest_date = c_date
+
+    workplan_data.append({
+        "Job Requirement": job_label,
+        "Company": company_name,
+        "Applied": applied_cnt,
+        "Shortlisted": shortlisted_cnt,
+        "In Interview": interview_cnt,
+        "Offer Released": offer_released_cnt,
+        "Offer Accepted": offer_accepted_cnt,
+        "Offer Rejected": offer_rejected_cnt,
+        "Joined": joined_cnt,
+        "No Show": no_show_cnt,
+        "Last Activity": latest_date.strftime("%Y-%m-%d") if latest_date else "-"
+    })
+
+workplan_df = pd.DataFrame(workplan_data)
+
+if not workplan_df.empty:
     st.dataframe(
-        summary_df,
+        workplan_df,
         use_container_width=True,
         hide_index=True,
         column_config={
-            "Recruiter": st.column_config.TextColumn("Recruiter Name", width="medium"),
-            "Sourced": st.column_config.NumberColumn("Candidates Sourced"),
-            "Interviews": st.column_config.NumberColumn("Interviews Logged"),
-            "Hires": st.column_config.ProgressColumn(
-                "Total Hires",
-                format="%d",
-                min_value=0,
-                max_value=max(summary_df["Hires"].max(), 1) if not summary_df.empty else 10
-            )
+            "Job Requirement": st.column_config.TextColumn("Job Requirement", width="medium"),
+            "Company": st.column_config.TextColumn("Company", width="small"),
+            "Applied": st.column_config.NumberColumn("Applied"),
+            "Shortlisted": st.column_config.NumberColumn("Shortlisted"),
+            "In Interview": st.column_config.NumberColumn("In Interview"),
+            "Offer Released": st.column_config.NumberColumn("Offer Released"),
+            "Offer Accepted": st.column_config.NumberColumn("Offer Accepted"),
+            "Offer Rejected": st.column_config.NumberColumn("Offer Rejected"),
+            "Joined": st.column_config.NumberColumn("Joined"),
+            "No Show": st.column_config.NumberColumn("No Show"),
+            "Last Activity": st.column_config.TextColumn("Last Activity")
         }
     )
-
-with table_col2:
-    st.markdown("### 🚀 Active Jobs Pipeline")
-    job_summary = []
-    for job in jobs:
-        if job.get("job_status") != "Open":
-            continue
-            
-        j_id = job["job_id"]
-        openings = int(job.get("openings", 1))
-        job_cands = [c for c in filtered_candidates if c.get("job_id") == j_id]
-        joined_count = len([c for c in job_cands if c.get("current_stage") == "Joined"])
-        
-        company_name = company_lookup.get(job.get("company_id"), "Unknown")
-        title_name = job_title_lookup.get(job.get("job_title_id"), "Unknown")
-        
-        job_summary.append({
-            "Job": f"{job.get('job_reference_no')} | {title_name}",
-            "Company": company_name,
-            "Candidates": len(job_cands),
-            "Openings": openings,
-            "Joined": joined_count,
-            "Fill Rate": min((joined_count / openings) * 100, 100) if openings > 0 else 0
-        })
-
-    job_summary_df = pd.DataFrame(job_summary)
-    if not job_summary_df.empty:
-        job_summary_df = job_summary_df.sort_values(by="Fill Rate", ascending=False)
-        
-    st.dataframe(
-        job_summary_df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Job": st.column_config.TextColumn("Job Requirement", width="medium"),
-            "Company": st.column_config.TextColumn("Company"),
-            "Candidates": st.column_config.NumberColumn("Pipeline"),
-            "Openings": st.column_config.NumberColumn("Target"),
-            "Joined": st.column_config.NumberColumn("Hired"),
-            "Fill Rate": st.column_config.ProgressColumn("Fill Rate %", format="%d%%", min_value=0, max_value=100)
-        }
-    )
+else:
+    st.info("No active assigned jobs found.")
 
 # ==========================
 # KANBAN BOARD ROW
@@ -298,27 +329,21 @@ st.divider()
 st.markdown("### 🧩 Pipeline Board")
 st.caption("Visualizing active candidates. Use the filters at the top of the dashboard to drill down into specific jobs or recruiters.")
 
-# 1. Define the core active stages you want to visualize
 kanban_stages = ["New", "Screening", "Shortlisted", "Interview", "Offer"]
-
-# 2. Create Streamlit columns dynamically based on the stages
 k_cols = st.columns(len(kanban_stages))
 
-# 3. Color mapping for the top border of cards to make them visually distinct
 stage_colors = {
-    "New": "#3B82F6",         # Blue
-    "Screening": "#F59E0B",   # Orange
-    "Shortlisted": "#8B5CF6", # Purple
-    "Interview": "#EC4899",   # Pink
-    "Offer": "#10B981"        # Green
+    "New": "#3B82F6",
+    "Screening": "#F59E0B",
+    "Shortlisted": "#8B5CF6",
+    "Interview": "#EC4899",
+    "Offer": "#10B981"
 }
 
 for idx, stage in enumerate(kanban_stages):
     with k_cols[idx]:
-        # Filter the already-fetched dashboard candidates for this specific stage
         stage_cands = [c for c in filtered_candidates if c.get("current_stage") == stage]
         
-        # Draw Column Header with Count
         st.markdown(
             f"<div style='background-color: #F1F5F9; padding: 8px; border-radius: 6px; text-align: center; font-weight: bold; color: #334155; margin-bottom: 10px;'>"
             f"{stage} ({len(stage_cands)})"
@@ -326,19 +351,16 @@ for idx, stage in enumerate(kanban_stages):
             unsafe_allow_html=True
         )
         
-        # Draw Candidate Cards
         for c in stage_cands:
             full_name = f"{c.get('first_name', '')} {c.get('last_name', '')}".strip()
             ref_no = c.get('candidate_reference_no', '')
             
-            # Grab just the JR Number (e.g., JR-2026-0001) to keep the card compact
             job_ref_full = job_lookup.get(c.get('job_id'), 'Unknown Job')
             job_ref_short = job_ref_full.split(' | ')[0] 
             
             recruiter = c.get('created_by_name', '')
             color = stage_colors.get(stage, "#64748B")
             
-            # Render the Custom HTML Card
             st.markdown(
                 f"""
                 <div style="
