@@ -238,7 +238,6 @@ for job in workplan_jobs:
     company_name = company_lookup.get(job.get("company_id"), "Unknown Company")
     job_label = f"{job.get('job_reference_no', '')} | {title_name}"
     
-    # NEW: Fetch target openings for the specific job
     openings = int(job.get("openings", 1))
 
     # Filter candidate data per job
@@ -329,65 +328,3 @@ if not workplan_df.empty:
     )
 else:
     st.info("No active assigned jobs found.")
-
-# ==========================
-# KANBAN BOARD ROW
-# ==========================
-st.divider()
-
-st.markdown("### 🧩 Pipeline Board")
-st.caption("Visualizing active candidates. Use the filters at the top of the dashboard to drill down into specific jobs or recruiters.")
-
-kanban_stages = ["New", "Screening", "Shortlisted", "Interview", "Offer"]
-k_cols = st.columns(len(kanban_stages))
-
-stage_colors = {
-    "New": "#3B82F6",
-    "Screening": "#F59E0B",
-    "Shortlisted": "#8B5CF6",
-    "Interview": "#EC4899",
-    "Offer": "#10B981"
-}
-
-for idx, stage in enumerate(kanban_stages):
-    with k_cols[idx]:
-        stage_cands = [c for c in filtered_candidates if c.get("current_stage") == stage]
-        
-        st.markdown(
-            f"<div style='background-color: #F1F5F9; padding: 8px; border-radius: 6px; text-align: center; font-weight: bold; color: #334155; margin-bottom: 10px;'>"
-            f"{stage} ({len(stage_cands)})"
-            f"</div>", 
-            unsafe_allow_html=True
-        )
-        
-        for c in stage_cands:
-            full_name = f"{c.get('first_name', '')} {c.get('last_name', '')}".strip()
-            ref_no = c.get('candidate_reference_no', '')
-            
-            job_ref_full = job_lookup.get(c.get('job_id'), 'Unknown Job')
-            job_ref_short = job_ref_full.split(' | ')[0] 
-            
-            recruiter = c.get('created_by_name', '')
-            color = stage_colors.get(stage, "#64748B")
-            
-            st.markdown(
-                f"""
-                <div style="
-                    background-color: white; 
-                    padding: 12px; 
-                    border-radius: 8px; 
-                    border-top: 4px solid {color}; 
-                    margin-bottom: 12px; 
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-                    border-left: 1px solid #E2E8F0;
-                    border-right: 1px solid #E2E8F0;
-                    border-bottom: 1px solid #E2E8F0;
-                ">
-                    <div style="color: #0F172A; font-size: 14px; font-weight: bold; margin-bottom: 4px;">{full_name}</div>
-                    <div style="color: #64748B; font-size: 12px; margin-bottom: 2px;">📄 {ref_no}</div>
-                    <div style="color: #64748B; font-size: 12px; margin-bottom: 2px;">💼 {job_ref_short}</div>
-                    <div style="color: #94A3B8; font-size: 11px; margin-top: 6px; text-align: right;">👤 {recruiter}</div>
-                </div>
-                """, 
-                unsafe_allow_html=True
-            )
