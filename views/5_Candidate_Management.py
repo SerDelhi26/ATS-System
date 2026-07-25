@@ -165,7 +165,7 @@ def get_resume_url(file_path):
 
         return None
 
-@st.cache_data(ttl=3600)
+
 def get_job_titles():
 
     return (
@@ -176,7 +176,7 @@ def get_job_titles():
         .data
     )
 
-@st.cache_data(ttl=3600)
+
 def get_companies():
 
     return (
@@ -187,7 +187,7 @@ def get_companies():
         .data
     )
 
-@st.cache_data(ttl=300)
+
 def get_recruiters():
 
     return (

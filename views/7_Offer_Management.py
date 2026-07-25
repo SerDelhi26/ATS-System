@@ -62,7 +62,6 @@ def get_candidates_for_offer():
     )
 
 
-@st.cache_data(ttl=3600)
 def get_job_titles():
 
     return (
@@ -73,7 +72,6 @@ def get_job_titles():
         .data
     )
 
-@st.cache_data(ttl=3600)
 def get_companies():
 
     return (
@@ -85,7 +83,6 @@ def get_companies():
     )
 
 
-@st.cache_data(ttl=300)
 def get_jobs():
 
     return (

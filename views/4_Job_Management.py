@@ -48,22 +48,22 @@ if st.session_state.get("success_message"):
 # ==========================
 # FUNCTIONS
 # ==========================
-@st.cache_data(ttl=3600)
+
 def get_job_titles():
     return supabase.table("job_title_master").select("*").execute().data
 
-@st.cache_data(ttl=3600)
+
 def get_companies():
     return supabase.table("company_master").select("*").execute().data
 
-@st.cache_data(ttl=3600)
+
 def get_categories():
     return supabase.table("category_master").select("*").execute().data
 
 def get_sub_categories(category_id):
     return supabase.table("sub_category_master").select("*").eq("category_id", category_id).execute().data
 
-@st.cache_data(ttl=300)
+
 def get_recruiters():
     return supabase.table("users").select("*").eq("role", "Recruiter").eq("status", "Active").execute().data
 
