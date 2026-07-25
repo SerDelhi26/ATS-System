@@ -393,25 +393,31 @@ with right_col:
 
     search_text = st.text_input("🔍 Search Job", placeholder="JR Number, Job Title, Company or Location")
 
-    # Filter Setup (Recruiters don't get the 'Recruiter Filter' because they only see their own)
+    # Filter Setup (Recruiters don't get the 'Status' or 'Recruiter' filters)
     if is_admin:
         filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
-    else:
-        filter_col1, filter_col2, filter_col3 = st.columns(3)
+        
+        with filter_col1:
+            company_filter = st.selectbox("Company Filter", ["All"] + sorted(list(companies_lookup.values())))
 
-    with filter_col1:
-        company_filter = st.selectbox("Company Filter", ["All"] + sorted(list(companies_lookup.values())))
+        with filter_col2:
+            status_filter = st.selectbox("Status Filter", ["All", "Open", "Closed", "On Hold", "Cancelled"])
 
-    with filter_col2:
-        status_filter = st.selectbox("Status Filter", ["All", "Open", "Closed", "On Hold", "Cancelled"])
+        with filter_col3:
+            category_filter = st.selectbox("Category Filter", ["All"] + sorted([c["category_name"] for c in categories]))
 
-    with filter_col3:
-        category_filter = st.selectbox("Category Filter", ["All"] + sorted([c["category_name"] for c in categories]))
-
-    if is_admin:
         with filter_col4:
             recruiter_filter = st.selectbox("Recruiter Filter", ["All"] + sorted([r["full_name"] for r in recruiters]))
+            
     else:
+        # Recruiters get a cleaner 2-column layout for their allowed filters
+        filter_col1, filter_col2 = st.columns(2)
+        with filter_col1:
+            company_filter = st.selectbox("Company Filter", ["All"] + sorted(list(companies_lookup.values())))
+        with filter_col2:
+            category_filter = st.selectbox("Category Filter", ["All"] + sorted([c["category_name"] for c in categories]))
+            
+        status_filter = "Open"  # Hardcoded backend logic for recruiters
         recruiter_filter = "All"
 
     assignments = supabase.table("job_assignment").select("*").execute()
@@ -426,11 +432,19 @@ with right_col:
     if is_admin:
         jobs = supabase.table("job_management").select(select_query).order("job_id", desc=True).limit(500).execute()
     else:
-        # Recruiters only fetch their assigned jobs
+        # Recruiters only fetch their assigned OPEN jobs
         my_assignments = supabase.table("job_assignment").select("job_id").eq("user_id", st.session_state.user_id).execute().data
         my_job_ids = [a["job_id"] for a in my_assignments]
         if my_job_ids:
-            jobs = supabase.table("job_management").select(select_query).in_("job_id", my_job_ids).order("job_id", desc=True).limit(500).execute()
+            jobs = (
+                supabase.table("job_management")
+                .select(select_query)
+                .in_("job_id", my_job_ids)
+                .eq("job_status", "Open")  # STRICT OPEN JOB RESTRICTION
+                .order("job_id", desc=True)
+                .limit(500)
+                .execute()
+            )
         else:
             class DummyResp: data = []
             jobs = DummyResp()
