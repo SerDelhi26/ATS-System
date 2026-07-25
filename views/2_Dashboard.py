@@ -228,16 +228,23 @@ else:
 
 workplan_data = []
 
+# Helper function to convert 0 to None for cleaner UI rendering
+def clean_zero(val):
+    return val if val > 0 else None
+
 for job in workplan_jobs:
     j_id = job["job_id"]
     title_name = job_title_lookup.get(job.get("job_title_id"), "Unknown Title")
     company_name = company_lookup.get(job.get("company_id"), "Unknown Company")
     job_label = f"{job.get('job_reference_no', '')} | {title_name}"
+    
+    # NEW: Fetch target openings for the specific job
+    openings = int(job.get("openings", 1))
 
     # Filter candidate data per job
     job_cands = [c for c in filtered_candidates if c.get("job_id") == j_id]
 
-    applied_cnt = len(job_cands)
+    candidate_cnt = len(job_cands)
     shortlisted_cnt = 0
     interview_cnt = 0
     offer_released_cnt = 0
@@ -286,14 +293,15 @@ for job in workplan_jobs:
     workplan_data.append({
         "Job Requirement": job_label,
         "Company": company_name,
-        "Applied": applied_cnt,
-        "Shortlisted": shortlisted_cnt,
-        "In Interview": interview_cnt,
-        "Offer Released": offer_released_cnt,
-        "Offer Accepted": offer_accepted_cnt,
-        "Offer Rejected": offer_rejected_cnt,
-        "Joined": joined_cnt,
-        "No Show": no_show_cnt,
+        "No Of Opening": openings,
+        "Candidate": clean_zero(candidate_cnt),
+        "Shortlisted": clean_zero(shortlisted_cnt),
+        "In Interview": clean_zero(interview_cnt),
+        "Offer Released": clean_zero(offer_released_cnt),
+        "Offer Accepted": clean_zero(offer_accepted_cnt),
+        "Offer Rejected": clean_zero(offer_rejected_cnt),
+        "Joined": clean_zero(joined_cnt),
+        "No Show": clean_zero(no_show_cnt),
         "Last Activity": latest_date.strftime("%Y-%m-%d") if latest_date else "-"
     })
 
@@ -307,14 +315,15 @@ if not workplan_df.empty:
         column_config={
             "Job Requirement": st.column_config.TextColumn("Job Requirement", width="medium"),
             "Company": st.column_config.TextColumn("Company", width="small"),
-            "Applied": st.column_config.NumberColumn("Applied"),
-            "Shortlisted": st.column_config.NumberColumn("Shortlisted"),
-            "In Interview": st.column_config.NumberColumn("In Interview"),
-            "Offer Released": st.column_config.NumberColumn("Offer Released"),
-            "Offer Accepted": st.column_config.NumberColumn("Offer Accepted"),
-            "Offer Rejected": st.column_config.NumberColumn("Offer Rejected"),
-            "Joined": st.column_config.NumberColumn("Joined"),
-            "No Show": st.column_config.NumberColumn("No Show"),
+            "No Of Opening": st.column_config.NumberColumn("No Of Opening", format="%d"),
+            "Candidate": st.column_config.NumberColumn("Candidate", format="%d"),
+            "Shortlisted": st.column_config.NumberColumn("Shortlisted", format="%d"),
+            "In Interview": st.column_config.NumberColumn("In Interview", format="%d"),
+            "Offer Released": st.column_config.NumberColumn("Offer Released", format="%d"),
+            "Offer Accepted": st.column_config.NumberColumn("Offer Accepted", format="%d"),
+            "Offer Rejected": st.column_config.NumberColumn("Offer Rejected", format="%d"),
+            "Joined": st.column_config.NumberColumn("Joined", format="%d"),
+            "No Show": st.column_config.NumberColumn("No Show", format="%d"),
             "Last Activity": st.column_config.TextColumn("Last Activity")
         }
     )
