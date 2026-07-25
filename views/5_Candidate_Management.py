@@ -635,7 +635,7 @@ with left_col:
         key=get_key("resume")
     )
 
-    # Added advanced statuses to prevent data clearing on edits
+    # Added advanced statuses to prevent data clearing on edits, transformed Joined into Hired
     candidate_status_options = [
         "New",
         "Screening",
@@ -644,7 +644,7 @@ with left_col:
         "Offer Released",   
         "Offer Accepted",   
         "Offer Rejected",   
-        "Joined",           
+        "Hired",           
         "No Show",          
         "Hold",
         "Rejected"
@@ -1301,14 +1301,21 @@ with right_col:
 
     with filter_col1:
 
+        # Included granular statuses for better filtering
         status_filter = st.selectbox(
             "Status",
             [
                 "All Status",
                 "New",
                 "Screening",
-                "Submitted",
+                "Shortlisted",
+                "Selected",
+                "Offer Released",
+                "Offer Accepted",
+                "Offer Rejected",
+                "Hired",
                 "Hold",
+                "No Show",
                 "Rejected"
             ]
         )
@@ -1430,9 +1437,7 @@ with right_col:
             for candidate
             in filtered_candidates
 
-            if candidate["candidate_status"]
-            ==
-            status_filter
+            if candidate["candidate_status"] == status_filter or candidate["current_stage"] == status_filter
 
         ]
 
@@ -1611,7 +1616,15 @@ with right_col:
 
             # --- STATUS DISPLAY ENGINE UPDATE ---
             master_stage = candidate.get("current_stage")
-            status = master_stage if master_stage else candidate.get("candidate_status", "")
+            manual_status = candidate.get("candidate_status", "")
+
+            # If the manual status contains granular offer details or 'Hired', prioritize it!
+            granular_statuses = ["Offer Released", "Offer Accepted", "Offer Rejected", "No Show", "Hired"]
+
+            if manual_status in granular_statuses:
+                status = manual_status
+            else:
+                status = master_stage if master_stage else manual_status
 
             status_colors = {
                 "New": "#2563EB",
@@ -1621,7 +1634,8 @@ with right_col:
                 "Offer Released": "#3B82F6",
                 "Offer Accepted": "#14B8A6",
                 "Offer Rejected": "#DC2626",
-                "Joined": "#10B981",
+                "Hired": "#10B981", # Added for UI
+                "Joined": "#10B981", # Fallback
                 "No Show": "#94A3B8",
                 "Hold": "#EAB308",
                 "Rejected": "#DC2626"

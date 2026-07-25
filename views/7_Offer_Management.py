@@ -146,12 +146,15 @@ def update_candidate_stage(
 
         stage = "Offer"
 
+    # Transform 'Joined' to 'Hired' for the Candidate Grid display
+    display_status = "Hired" if offer_status == "Joined" else offer_status
+
     (
         supabase
         .table("candidate_management")
         .update({
             "current_stage": stage,
-            "candidate_status": offer_status # <-- Overwrites candidate grid manual status
+            "candidate_status": display_status 
         })
         .eq(
             "candidate_id",
