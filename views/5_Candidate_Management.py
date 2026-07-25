@@ -1401,7 +1401,7 @@ with right_col:
             current_company,
             skills,
             candidate_status,
-            current_stage,     <-- Pulls current stage to grid
+            current_stage,
             created_by_name,
             created_by_user_id,
             experience_years,
