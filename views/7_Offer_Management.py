@@ -54,7 +54,8 @@ def get_candidates_for_offer():
             first_name,
             last_name,
             job_id,
-            current_stage
+            current_stage,
+            created_by_user_id
             """
         )
         .execute()
@@ -296,9 +297,13 @@ if st.session_state.edit_offer_id:
     )
 
     if offer:
-
-        editing = True
-
+        # SECURITY CHECK: Only Admin or the Creator can edit
+        if st.session_state.user_role == "Admin" or offer["created_by_user_id"] == st.session_state.user_id:
+            editing = True
+        else:
+            st.error("You are not authorized to edit this offer.")
+            st.session_state.edit_offer_id = None
+            st.stop()
     else:
 
         st.session_state.edit_offer_id = None
@@ -352,6 +357,10 @@ with left_col:
     )
 
     raw_candidates = get_candidates_for_offer()
+    
+    # Add security filtering for the dropdown
+    if st.session_state.user_role != "Admin":
+        raw_candidates = [c for c in raw_candidates if c.get("created_by_user_id") == st.session_state.user_id]
     
     # ENHANCEMENT: Only show "Selected" candidates when scheduling new offers. 
     # Once they get an offer, they hide automatically!
@@ -987,16 +996,24 @@ with right_col:
                 unsafe_allow_html=True
             )
 
-            if cols[5].button(
-                "✏️",
-                key=f"edit_{item['offer_id']}"
-            ):
+            # SECURITY CHECK: Determine if user is authorized to edit
+            can_edit = False
+            if st.session_state.user_role == "Admin":
+                can_edit = True
+            elif item.get("created_by_user_id") == st.session_state.user_id:
+                can_edit = True
 
-                st.session_state.edit_offer_id = (
-                    item["offer_id"]
-                )
-
-                st.rerun()
+            if can_edit:
+                if cols[5].button(
+                    "✏️",
+                    key=f"edit_{item['offer_id']}"
+                ):
+                    st.session_state.edit_offer_id = (
+                        item["offer_id"]
+                    )
+                    st.rerun()
+            else:
+                cols[5].markdown("<div style='margin-top:2px;'>🔒</div>", unsafe_allow_html=True)
 
     else:
 

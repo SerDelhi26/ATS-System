@@ -218,7 +218,7 @@ with chart_col2:
 # ==========================
 st.divider()
 st.markdown("### 🏆 Recruiter Performance")
-st.caption("Overview of team productivity based on their assigned job pipelines.")
+st.caption("Overview of team productivity based on their assigned candidates.")
 
 performance_data = []
 for recruiter in recruiters:
@@ -229,9 +229,8 @@ for recruiter in recruiters:
     if recruiter_filter != "All Recruiters" and r_name != recruiter_filter:
         continue
         
-    # Map performance by Assigned Jobs
-    r_assigned_job_ids = [a["job_id"] for a in job_assignments if a.get("user_id") == r_id]
-    r_cands = [c for c in filtered_candidates if c.get("job_id") in r_assigned_job_ids]
+    # Map performance by Candidate Creator (Ownership)
+    r_cands = [c for c in filtered_candidates if c.get("created_by_name") == r_name]
     
     pipeline_total = len(r_cands)
     shortlisted = len([c for c in r_cands if c.get("current_stage") == "Shortlisted" or c.get("candidate_status") == "Shortlisted"])

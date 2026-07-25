@@ -57,7 +57,8 @@ def get_candidates_for_interview():
             last_name,
             job_id,
             current_stage,
-            candidate_status
+            candidate_status,
+            created_by_user_id
             """
         )
         .execute()
@@ -258,9 +259,13 @@ if st.session_state.edit_interview_id:
     )
 
     if interview:
-
-        editing = True
-
+        # SECURITY CHECK: Only Admin or the Creator can edit
+        if st.session_state.user_role == "Admin" or interview["created_by_user_id"] == st.session_state.user_id:
+            editing = True
+        else:
+            st.error("You are not authorized to edit this interview.")
+            st.session_state.edit_interview_id = None
+            st.stop()
     else:
 
         st.session_state.edit_interview_id = None
@@ -320,6 +325,10 @@ with left_col:
     )
 
     raw_candidates = get_candidates_for_interview()
+    
+    # Add security filtering for the dropdown
+    if st.session_state.user_role != "Admin":
+        raw_candidates = [c for c in raw_candidates if c.get("created_by_user_id") == st.session_state.user_id]
 
     # Dynamic python filtering for candidate dropdown
     if not editing:
@@ -1186,7 +1195,14 @@ with right_col:
             elif item["candidate_id"] in terminal_candidates and status not in ["Selected", "Rejected"]:
                 is_locked = True
 
-            if is_locked:
+            # SECURITY CHECK: Determine if the logged-in user has edit rights
+            can_edit = False
+            if st.session_state.user_role == "Admin":
+                can_edit = True
+            elif item.get("created_by_user_id") == st.session_state.user_id:
+                can_edit = True
+
+            if is_locked or not can_edit:
                 cols[6].markdown("<div style='margin-top:2px;'>🔒</div>", unsafe_allow_html=True)
             else:
                 if cols[6].button(
