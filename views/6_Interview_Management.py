@@ -863,7 +863,8 @@ with right_col:
 
     interviews = result.data
 
-    filter_col1, filter_col2 = st.columns(2)
+    # --- UPDATED: 3-Column layout for filters ---
+    filter_col1, filter_col2, filter_col3 = st.columns(3)
 
     with filter_col1:
 
@@ -895,6 +896,24 @@ with right_col:
         round_filter = st.selectbox(
             "Interview Round",
             ["All Rounds"] + all_rounds
+        )
+        
+    with filter_col3:
+        
+        # Dynamically extract unique job display strings from the current interviews list
+        all_jobs_in_interviews = sorted(
+            list(
+                {
+                    job_display_lookup.get(item["job_id"], "Unknown Job")
+                    for item in interviews
+                    if item.get("job_id")
+                }
+            )
+        )
+        
+        job_filter = st.selectbox(
+            "Job",
+            ["All Jobs"] + all_jobs_in_interviews
         )
 
     search_text = st.text_input(
@@ -959,6 +978,22 @@ with right_col:
             if item["interview_round"]
             == round_filter
 
+        ]
+        
+    # --------------------------
+    # JOB FILTER
+    # --------------------------
+
+    if job_filter != "All Jobs":
+        
+        interviews = [
+            
+            item
+            
+            for item in interviews
+            
+            if job_display_lookup.get(item["job_id"], "") == job_filter
+            
         ]
 
     # --------------------------
