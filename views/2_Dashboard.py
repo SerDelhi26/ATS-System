@@ -295,7 +295,7 @@ with table_col2:
 # ==========================
 st.divider()
 
-st.markdown("### 🧩 Pipeline Kanban Board")
+st.markdown("### 🧩 Pipeline Board")
 st.caption("Visualizing active candidates. Use the filters at the top of the dashboard to drill down into specific jobs or recruiters.")
 
 # 1. Define the core active stages you want to visualize

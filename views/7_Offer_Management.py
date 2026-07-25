@@ -150,7 +150,8 @@ def update_candidate_stage(
         supabase
         .table("candidate_management")
         .update({
-            "current_stage": stage
+            "current_stage": stage,
+            "candidate_status": offer_status # <-- Overwrites candidate grid manual status
         })
         .eq(
             "candidate_id",
@@ -523,7 +524,10 @@ with left_col:
             (
                 supabase
                 .table("candidate_management")
-                .update({"current_stage": "Selected"})
+                .update({
+                    "current_stage": "Selected",
+                    "candidate_status": "Selected" # <-- Safely revert candidate manual status
+                })
                 .eq("candidate_id", selected_candidate_id)
                 .execute()
             )

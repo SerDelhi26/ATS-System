@@ -635,10 +635,17 @@ with left_col:
         key=get_key("resume")
     )
 
+    # Added advanced statuses to prevent data clearing on edits
     candidate_status_options = [
         "New",
         "Screening",
         "Shortlisted",
+        "Selected",         
+        "Offer Released",   
+        "Offer Accepted",   
+        "Offer Rejected",   
+        "Joined",           
+        "No Show",          
         "Hold",
         "Rejected"
     ]
@@ -1139,6 +1146,9 @@ with left_col:
 
                 "candidate_status":
                     candidate_status,
+                    
+                "current_stage":
+                    candidate_status,   # <-- Keeps stages in sync upon initial creation/edit
 
                 "remarks":
                     remarks.strip(),
@@ -1391,6 +1401,7 @@ with right_col:
             current_company,
             skills,
             candidate_status,
+            current_stage,     <-- Pulls current stage to grid
             created_by_name,
             created_by_user_id,
             experience_years,
@@ -1598,19 +1609,22 @@ with right_col:
                 experience
             )
 
-            status = candidate.get(
-                "candidate_status",
-                ""
-            )
+            # --- STATUS DISPLAY ENGINE UPDATE ---
+            master_stage = candidate.get("current_stage")
+            status = master_stage if master_stage else candidate.get("candidate_status", "")
 
             status_colors = {
-
                 "New": "#2563EB",
                 "Screening": "#F59E0B",
                 "Shortlisted": "#8B5CF6",
+                "Selected": "#0EA5E9",
+                "Offer Released": "#3B82F6",
+                "Offer Accepted": "#14B8A6",
+                "Offer Rejected": "#DC2626",
+                "Joined": "#10B981",
+                "No Show": "#94A3B8",
                 "Hold": "#EAB308",
                 "Rejected": "#DC2626"
-
             }
 
             color = status_colors.get(
