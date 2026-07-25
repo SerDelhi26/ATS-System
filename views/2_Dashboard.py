@@ -67,7 +67,7 @@ st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 # ==========================
 # DATA FETCHING (Selective Columns)
 # ==========================
-@st.cache_data(ttl=300)
+# @st.cache_data(ttl=300)
 def get_dashboard_data():
     jobs = supabase.table("job_management").select("job_id, job_reference_no, job_status, openings, company_id, job_title_id").execute().data
     candidates = supabase.table("candidate_management").select("candidate_id, candidate_reference_no, first_name, last_name, job_id, current_stage, candidate_status, created_by_name, created_on").execute().data
