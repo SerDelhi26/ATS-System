@@ -208,6 +208,71 @@ with chart_col2:
     fig_pie.update_layout(margin=dict(l=20, r=20, t=20, b=20), paper_bgcolor="rgba(0,0,0,0)", showlegend=True, legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
     st.plotly_chart(fig_pie, use_container_width=True)
 
+
+# ==========================
+# RECRUITER PERFORMANCE TABLE
+# ==========================
+st.divider()
+st.markdown("### 🏆 Recruiter Performance")
+st.caption("Overview of team productivity and pipeline conversion metrics.")
+
+performance_data = []
+for recruiter in recruiters:
+    r_name = recruiter["full_name"]
+    
+    # Respect the global dropdown filter for recruiters
+    if recruiter_filter != "All Recruiters" and r_name != recruiter_filter:
+        continue
+        
+    r_cands = [c for c in filtered_candidates if c.get("created_by_name") == r_name]
+    
+    sourced = len(r_cands)
+    shortlisted = len([c for c in r_cands if c.get("current_stage") == "Shortlisted" or c.get("candidate_status") == "Shortlisted"])
+    interviews = len([c for c in r_cands if c.get("current_stage") == "Interview"])
+    offers = len([c for c in r_cands if c.get("current_stage") == "Offer" or c.get("candidate_status") in ["Offer Released", "Offer Accepted"]])
+    hires = len([c for c in r_cands if c.get("current_stage") == "Joined" or c.get("candidate_status") in ["Joined", "Hired"]])
+    
+    conversion = (hires / sourced * 100) if sourced > 0 else 0
+    
+    # Append to table (we keep 0s here because in performance tracking, a 0 is an important metric)
+    if sourced > 0 or recruiter_filter == "All Recruiters":
+        performance_data.append({
+            "Recruiter": r_name,
+            "Sourced": sourced,
+            "Shortlisted": shortlisted,
+            "In Interview": interviews,
+            "Offered": offers,
+            "Hired": hires,
+            "Conversion Rate": conversion
+        })
+
+perf_df = pd.DataFrame(performance_data)
+
+if not perf_df.empty:
+    perf_df = perf_df.sort_values(by=["Hired", "Sourced"], ascending=[False, False])
+    st.dataframe(
+        perf_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Recruiter": st.column_config.TextColumn("Recruiter Name"),
+            "Sourced": st.column_config.NumberColumn("Candidates Sourced"),
+            "Shortlisted": st.column_config.NumberColumn("Shortlisted"),
+            "In Interview": st.column_config.NumberColumn("In Interview"),
+            "Offered": st.column_config.NumberColumn("Offered"),
+            "Hired": st.column_config.NumberColumn("Total Hires"),
+            "Conversion Rate": st.column_config.ProgressColumn(
+                "Hire/Sourced %",
+                format="%d%%",
+                min_value=0,
+                max_value=100
+            )
+        }
+    )
+else:
+    st.info("No recruiter performance data found for the selected filters.")
+
+
 # ==========================
 # USER WORKPLAN SECTION
 # ==========================
