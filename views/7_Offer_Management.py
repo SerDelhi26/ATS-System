@@ -671,6 +671,43 @@ with left_col:
                         "Offer Saved Successfully."
                     )
                 
+                # ==========================================
+                # SMART AUTO-CLOSE JOB LOGIC
+                # ==========================================
+                if offer_status == "Joined":
+                    # Fetch target openings for the job
+                    job_res = (
+                        supabase.table("job_management")
+                        .select("openings, job_status")
+                        .eq("job_id", selected_job_id)
+                        .single()
+                        .execute()
+                    )
+                    
+                    if job_res.data:
+                        target_openings = int(job_res.data.get("openings", 1))
+                        
+                        # Count total candidates who have Joined this specific job
+                        joined_res = (
+                            supabase.table("candidate_management")
+                            .select("candidate_id")
+                            .eq("job_id", selected_job_id)
+                            .eq("current_stage", "Joined")
+                            .execute()
+                        )
+                        current_joined_count = len(joined_res.data)
+                        
+                        # Auto-close the job if hiring targets are met
+                        if current_joined_count >= target_openings and job_res.data.get("job_status") != "Closed":
+                            (
+                                supabase.table("job_management")
+                                .update({"job_status": "Closed"})
+                                .eq("job_id", selected_job_id)
+                                .execute()
+                            )
+                            st.toast(f"🎯 Target reached! Job automatically closed ({current_joined_count}/{target_openings} filled).")
+                # ==========================================
+
                 # Advance Reset Tracker to clean the form
                 st.session_state.form_reset_offer += 1
                 st.rerun()
