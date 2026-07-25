@@ -33,7 +33,6 @@ st.markdown("# 📊 ATS Master Report")
 # ==========================
 # OPTIMIZED FUNCTIONS (Targeted Columns)
 # ==========================
-# @st.cache_data(ttl=60)
 def get_report_data():
     try:
         # Fetch only necessary columns to keep network payloads lightweight

@@ -60,7 +60,6 @@ def normalize_phone(phone):
     return digits[-10:] if len(digits) >= 10 else digits
 
 
-# REMOVED @st.cache_data SO ASSIGNED JOBS SHOW UP INSTANTLY
 def get_jobs_for_user(
     user_id,
     user_role
