@@ -103,6 +103,10 @@ def parse_date(date_str):
     except:
         return None
 
+# Helper function to convert 0 to None for cleaner UI rendering in tables
+def clean_zero(val):
+    return val if val > 0 else None
+
 # ==========================
 # FILTERS UI
 # ==========================
@@ -225,7 +229,7 @@ for recruiter in recruiters:
     if recruiter_filter != "All Recruiters" and r_name != recruiter_filter:
         continue
         
-    # NEW LOGIC: Map performance by Assigned Jobs rather than Data Entry
+    # Map performance by Assigned Jobs
     r_assigned_job_ids = [a["job_id"] for a in job_assignments if a.get("user_id") == r_id]
     r_cands = [c for c in filtered_candidates if c.get("job_id") in r_assigned_job_ids]
     
@@ -237,14 +241,14 @@ for recruiter in recruiters:
     
     conversion = (hires / pipeline_total * 100) if pipeline_total > 0 else 0
     
-    # We display all recruiters to maintain competition, even if their pipeline is currently 0
+    # Apply clean_zero so zeroes appear as blanks
     performance_data.append({
         "Recruiter": r_name,
-        "Total Pipeline": pipeline_total,
-        "Shortlisted": shortlisted,
-        "In Interview": interviews,
-        "Offered": offers,
-        "Hired": hires,
+        "Total Pipeline": clean_zero(pipeline_total),
+        "Shortlisted": clean_zero(shortlisted),
+        "In Interview": clean_zero(interviews),
+        "Offered": clean_zero(offers),
+        "Hired": clean_zero(hires),
         "Conversion Rate": conversion
     })
 
@@ -258,11 +262,11 @@ if not perf_df.empty:
         hide_index=True,
         column_config={
             "Recruiter": st.column_config.TextColumn("Recruiter Name"),
-            "Total Pipeline": st.column_config.NumberColumn("Total Pipeline"),
-            "Shortlisted": st.column_config.NumberColumn("Shortlisted"),
-            "In Interview": st.column_config.NumberColumn("In Interview"),
-            "Offered": st.column_config.NumberColumn("Offered"),
-            "Hired": st.column_config.NumberColumn("Total Hires"),
+            "Total Pipeline": st.column_config.NumberColumn("Total Pipeline", format="%d"),
+            "Shortlisted": st.column_config.NumberColumn("Shortlisted", format="%d"),
+            "In Interview": st.column_config.NumberColumn("In Interview", format="%d"),
+            "Offered": st.column_config.NumberColumn("Offered", format="%d"),
+            "Hired": st.column_config.NumberColumn("Total Hires", format="%d"),
             "Conversion Rate": st.column_config.ProgressColumn(
                 "Hire/Pipeline %",
                 format="%d%%",
@@ -294,10 +298,6 @@ else:
     workplan_jobs = [j for j in jobs if j.get("job_status") == "Open" and j.get("job_id") in assigned_job_ids]
 
 workplan_data = []
-
-# Helper function to convert 0 to None for cleaner UI rendering
-def clean_zero(val):
-    return val if val > 0 else None
 
 for job in workplan_jobs:
     j_id = job["job_id"]
