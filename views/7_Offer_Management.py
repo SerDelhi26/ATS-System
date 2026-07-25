@@ -164,6 +164,55 @@ def update_candidate_stage(
     )
 
 
+# --- NEW: SMART SYNC FUNCTION ---
+def sync_job_status(job_id):
+    """Checks the target openings vs actual joined and auto-closes or auto-opens the job."""
+    
+    # 1. Fetch target openings and current job status
+    job_res = (
+        supabase.table("job_management")
+        .select("openings, job_status")
+        .eq("job_id", job_id)
+        .single()
+        .execute()
+    )
+    
+    if job_res.data:
+        target_openings = int(job_res.data.get("openings", 1))
+        current_status = job_res.data.get("job_status")
+        
+        # 2. Count total candidates who have Joined this specific job
+        joined_res = (
+            supabase.table("candidate_management")
+            .select("candidate_id")
+            .eq("job_id", job_id)
+            .eq("current_stage", "Joined")
+            .execute()
+        )
+        current_joined_count = len(joined_res.data)
+        
+        # 3. Two-Way Sync Logic
+        # Case A: Target Met -> Auto-Close Job
+        if current_joined_count >= target_openings and current_status != "Closed":
+            (
+                supabase.table("job_management")
+                .update({"job_status": "Closed"})
+                .eq("job_id", job_id)
+                .execute()
+            )
+            st.toast(f"🎯 Target reached! Job automatically closed ({current_joined_count}/{target_openings} filled).")
+            
+        # Case B: Target No Longer Met (Candidate backed out/changed) -> Auto-Reopen Job
+        elif current_joined_count < target_openings and current_status == "Closed":
+            (
+                supabase.table("job_management")
+                .update({"job_status": "Open"})
+                .eq("job_id", job_id)
+                .execute()
+            )
+            st.toast(f"🔄 Candidate status changed. Job automatically reopened ({current_joined_count}/{target_openings} filled).")
+
+
 def get_offer_by_id(
     offer_id
 ):
@@ -535,6 +584,9 @@ with left_col:
                 .execute()
             )
             
+            # 3. Make sure the job reverts back to open if they were "Joined" before deletion
+            sync_job_status(selected_job_id)
+            
             st.success("Offer deleted successfully. Candidate reverted to 'Selected' stage.")
             st.session_state.edit_offer_id = None
             st.session_state.form_reset_offer += 1
@@ -672,41 +724,9 @@ with left_col:
                     )
                 
                 # ==========================================
-                # SMART AUTO-CLOSE JOB LOGIC
+                # TWO-WAY SMART AUTO-SYNC JOB LOGIC
                 # ==========================================
-                if offer_status == "Joined":
-                    # Fetch target openings for the job
-                    job_res = (
-                        supabase.table("job_management")
-                        .select("openings, job_status")
-                        .eq("job_id", selected_job_id)
-                        .single()
-                        .execute()
-                    )
-                    
-                    if job_res.data:
-                        target_openings = int(job_res.data.get("openings", 1))
-                        
-                        # Count total candidates who have Joined this specific job
-                        joined_res = (
-                            supabase.table("candidate_management")
-                            .select("candidate_id")
-                            .eq("job_id", selected_job_id)
-                            .eq("current_stage", "Joined")
-                            .execute()
-                        )
-                        current_joined_count = len(joined_res.data)
-                        
-                        # Auto-close the job if hiring targets are met
-                        if current_joined_count >= target_openings and job_res.data.get("job_status") != "Closed":
-                            (
-                                supabase.table("job_management")
-                                .update({"job_status": "Closed"})
-                                .eq("job_id", selected_job_id)
-                                .execute()
-                            )
-                            st.toast(f"🎯 Target reached! Job automatically closed ({current_joined_count}/{target_openings} filled).")
-                # ==========================================
+                sync_job_status(selected_job_id)
 
                 # Advance Reset Tracker to clean the form
                 st.session_state.form_reset_offer += 1
