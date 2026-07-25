@@ -67,7 +67,7 @@ st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 # ==========================
 # DATA FETCHING (Selective Columns)
 # ==========================
-
+@st.cache_data(ttl=300)
 def get_dashboard_data():
     jobs = supabase.table("job_management").select("job_id, job_reference_no, job_status, openings, company_id, job_title_id").execute().data
     candidates = supabase.table("candidate_management").select("candidate_id, candidate_reference_no, first_name, last_name, job_id, current_stage, candidate_status, created_by_name, created_on").execute().data
@@ -154,7 +154,7 @@ total_hired = len([c for c in filtered_candidates if c.get("current_stage") == "
 
 col1, col2, col3, col4, col5 = st.columns(5)
 with col1:
-    kpi_card("Open Jobs", open_jobs, "💼", "#2563EB")
+    kpi_card("Jobs", open_jobs, "💼", "#2563EB")
 with col2:
     kpi_card("Candidates", total_candidates, "👥", "#8B5CF6")
 with col3:
@@ -290,3 +290,74 @@ with table_col2:
             "Fill Rate": st.column_config.ProgressColumn("Fill Rate %", format="%d%%", min_value=0, max_value=100)
         }
     )
+
+# ==========================
+# KANBAN BOARD ROW
+# ==========================
+st.divider()
+
+st.markdown("### 🧩 Pipeline Kanban Board")
+st.caption("Visualizing active candidates. Use the filters at the top of the dashboard to drill down into specific jobs or recruiters.")
+
+# 1. Define the core active stages you want to visualize
+kanban_stages = ["New", "Screening", "Shortlisted", "Interview", "Offer"]
+
+# 2. Create Streamlit columns dynamically based on the stages
+k_cols = st.columns(len(kanban_stages))
+
+# 3. Color mapping for the top border of cards to make them visually distinct
+stage_colors = {
+    "New": "#3B82F6",         # Blue
+    "Screening": "#F59E0B",   # Orange
+    "Shortlisted": "#8B5CF6", # Purple
+    "Interview": "#EC4899",   # Pink
+    "Offer": "#10B981"        # Green
+}
+
+for idx, stage in enumerate(kanban_stages):
+    with k_cols[idx]:
+        # Filter the already-fetched dashboard candidates for this specific stage
+        stage_cands = [c for c in filtered_candidates if c.get("current_stage") == stage]
+        
+        # Draw Column Header with Count
+        st.markdown(
+            f"<div style='background-color: #F1F5F9; padding: 8px; border-radius: 6px; text-align: center; font-weight: bold; color: #334155; margin-bottom: 10px;'>"
+            f"{stage} ({len(stage_cands)})"
+            f"</div>", 
+            unsafe_allow_html=True
+        )
+        
+        # Draw Candidate Cards
+        for c in stage_cands:
+            full_name = f"{c.get('first_name', '')} {c.get('last_name', '')}".strip()
+            ref_no = c.get('candidate_reference_no', '')
+            
+            # Grab just the JR Number (e.g., JR-2026-0001) to keep the card compact
+            job_ref_full = job_lookup.get(c.get('job_id'), 'Unknown Job')
+            job_ref_short = job_ref_full.split(' | ')[0] 
+            
+            recruiter = c.get('created_by_name', '')
+            color = stage_colors.get(stage, "#64748B")
+            
+            # Render the Custom HTML Card
+            st.markdown(
+                f"""
+                <div style="
+                    background-color: white; 
+                    padding: 12px; 
+                    border-radius: 8px; 
+                    border-top: 4px solid {color}; 
+                    margin-bottom: 12px; 
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+                    border-left: 1px solid #E2E8F0;
+                    border-right: 1px solid #E2E8F0;
+                    border-bottom: 1px solid #E2E8F0;
+                ">
+                    <div style="color: #0F172A; font-size: 14px; font-weight: bold; margin-bottom: 4px;">{full_name}</div>
+                    <div style="color: #64748B; font-size: 12px; margin-bottom: 2px;">📄 {ref_no}</div>
+                    <div style="color: #64748B; font-size: 12px; margin-bottom: 2px;">💼 {job_ref_short}</div>
+                    <div style="color: #94A3B8; font-size: 11px; margin-top: 6px; text-align: right;">👤 {recruiter}</div>
+                </div>
+                """, 
+                unsafe_allow_html=True
+            )
