@@ -452,7 +452,7 @@ with right_col:
 
     jobs_df = pd.DataFrame(jobs.data)
 
-    # Apply Search & Dropdown Filters
+# Apply Search & Dropdown Filters
     if not jobs_df.empty and search_text:
         matching_job_titles = [jid for jid, title in job_titles_lookup.items() if search_text.lower() in title.lower()]
         matching_companies = [cid for cid, company in companies_lookup.items() if search_text.lower() in company.lower()]
@@ -463,18 +463,19 @@ with right_col:
             jobs_df["company_id"].isin(matching_companies)
         ]
 
-    if company_filter != "All":
+    # ADDED 'not jobs_df.empty' to prevent KeyError on empty datasets
+    if not jobs_df.empty and company_filter != "All":
         company_ids = [cid for cid, cname in companies_lookup.items() if cname == company_filter]
         jobs_df = jobs_df[jobs_df["company_id"].isin(company_ids)]
 
-    if status_filter != "All":
+    if not jobs_df.empty and status_filter != "All":
         jobs_df = jobs_df[jobs_df["job_status"] == status_filter]
 
-    if category_filter != "All":
+    if not jobs_df.empty and category_filter != "All":
         category_ids = [cid for cid, cname in categories_lookup.items() if cname == category_filter]
         jobs_df = jobs_df[jobs_df["category_id"].isin(category_ids)]
 
-    if recruiter_filter != "All":
+    if not jobs_df.empty and recruiter_filter != "All":
         recruiter_ids = [uid for uid, name in recruiter_lookup.items() if name == recruiter_filter]
         assigned_job_ids = [item["job_id"] for item in assignments_data if item["user_id"] in recruiter_ids]
         jobs_df = jobs_df[jobs_df["job_id"].isin(assigned_job_ids)]
