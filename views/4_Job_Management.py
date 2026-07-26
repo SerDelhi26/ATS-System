@@ -52,10 +52,8 @@ if st.session_state.get("success_message"):
 def get_job_titles():
     return supabase.table("job_title_master").select("*").execute().data
 
-
 def get_companies():
     return supabase.table("company_master").select("*").execute().data
-
 
 def get_categories():
     return supabase.table("category_master").select("*").execute().data
@@ -63,6 +61,9 @@ def get_categories():
 def get_sub_categories(category_id):
     return supabase.table("sub_category_master").select("*").eq("category_id", category_id).execute().data
 
+# NEW: Fetch all subcategories for the global filter lookup
+def get_all_sub_categories():
+    return supabase.table("sub_category_master").select("*").execute().data
 
 def get_recruiters():
     return supabase.table("users").select("*").eq("role", "Recruiter").eq("status", "Active").execute().data
@@ -92,6 +93,7 @@ job_titles = get_job_titles()
 companies = get_companies()
 categories = get_categories()
 recruiters = get_recruiters()
+all_sub_categories = get_all_sub_categories()
 
 # ==========================
 # LAYOUT
@@ -339,7 +341,7 @@ if is_admin:
                     "invoice_no": invoice_no,
                     "invoice_status": invoice_status,
                     "remark": remark,
-                    "created_by": st.session_state.user_id
+                    "created_by": st.session_state.user_id # Ensuring ownership is attached
                 }
 
                 if editing_job:
@@ -390,13 +392,14 @@ with right_col:
     job_titles_lookup = {item["job_title_id"]: item["job_title_name"] for item in job_titles}
     companies_lookup = {item["company_id"]: item["company_name"] for item in companies}
     categories_lookup = {item["category_id"]: item["category_name"] for item in categories}
+    sub_categories_lookup = {item["sub_category_id"]: item["sub_category_name"] for item in all_sub_categories}
     recruiter_lookup = {user["user_id"]: user["full_name"] for user in recruiters}
 
     search_text = st.text_input("🔍 Search Job", placeholder="JR Number, Job Title, Company or Location")
 
-    # Filter Setup (Recruiters don't get the 'Status' or 'Recruiter' filters)
+    # Filter Setup (Recruiters have Status locked to Open internally)
     if is_admin:
-        filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
+        filter_col1, filter_col2, filter_col3, filter_col4, filter_col5 = st.columns(5)
         
         with filter_col1:
             company_filter = st.selectbox("Company Filter", ["All"] + sorted(list(companies_lookup.values())))
@@ -406,27 +409,37 @@ with right_col:
 
         with filter_col3:
             category_filter = st.selectbox("Category Filter", ["All"] + sorted([c["category_name"] for c in categories]))
-
+            
         with filter_col4:
+            sub_category_filter = st.selectbox("Sub Category Filter", ["All"] + sorted(list(sub_categories_lookup.values())))
+
+        with filter_col5:
             recruiter_filter = st.selectbox("Recruiter Filter", ["All"] + sorted([r["full_name"] for r in recruiters]))
             
     else:
-        # Recruiters get a cleaner 2-column layout for their allowed filters
-        filter_col1, filter_col2 = st.columns(2)
+        # Recruiters get a 4-column layout for their allowed filters
+        filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
+        
         with filter_col1:
             company_filter = st.selectbox("Company Filter", ["All"] + sorted(list(companies_lookup.values())))
+            
         with filter_col2:
             category_filter = st.selectbox("Category Filter", ["All"] + sorted([c["category_name"] for c in categories]))
             
+        with filter_col3:
+            sub_category_filter = st.selectbox("Sub Category Filter", ["All"] + sorted(list(sub_categories_lookup.values())))
+            
+        with filter_col4:
+            recruiter_filter = st.selectbox("Recruiter Filter", ["All"] + sorted([r["full_name"] for r in recruiters]))
+            
         status_filter = "Open"  # Hardcoded backend logic for recruiters
-        recruiter_filter = "All"
 
     assignments = supabase.table("job_assignment").select("*").execute()
     assignments_data = assignments.data
 
-    # Fetch Jobs based on Role
+    # Fetch Jobs based on Role (added sub_category_id to select)
     select_query = """
-        job_id, job_reference_no, job_title_id, company_id, category_id, location, openings, job_status, job_document_path,
+        job_id, job_reference_no, job_title_id, company_id, category_id, sub_category_id, location, openings, job_status, job_document_path,
         experience_min_year, experience_max_year, pay_min, pay_max, currency, skills_required, job_description
     """
     
@@ -452,7 +465,7 @@ with right_col:
 
     jobs_df = pd.DataFrame(jobs.data)
 
-# Apply Search & Dropdown Filters
+    # Apply Search & Dropdown Filters (with empty dataframe safety check)
     if not jobs_df.empty and search_text:
         matching_job_titles = [jid for jid, title in job_titles_lookup.items() if search_text.lower() in title.lower()]
         matching_companies = [cid for cid, company in companies_lookup.items() if search_text.lower() in company.lower()]
@@ -463,7 +476,6 @@ with right_col:
             jobs_df["company_id"].isin(matching_companies)
         ]
 
-    # ADDED 'not jobs_df.empty' to prevent KeyError on empty datasets
     if not jobs_df.empty and company_filter != "All":
         company_ids = [cid for cid, cname in companies_lookup.items() if cname == company_filter]
         jobs_df = jobs_df[jobs_df["company_id"].isin(company_ids)]
@@ -474,6 +486,10 @@ with right_col:
     if not jobs_df.empty and category_filter != "All":
         category_ids = [cid for cid, cname in categories_lookup.items() if cname == category_filter]
         jobs_df = jobs_df[jobs_df["category_id"].isin(category_ids)]
+        
+    if not jobs_df.empty and sub_category_filter != "All":
+        subcat_ids = [sid for sid, sname in sub_categories_lookup.items() if sname == sub_category_filter]
+        jobs_df = jobs_df[jobs_df["sub_category_id"].isin(subcat_ids)]
 
     if not jobs_df.empty and recruiter_filter != "All":
         recruiter_ids = [uid for uid, name in recruiter_lookup.items() if name == recruiter_filter]
@@ -549,7 +565,7 @@ with right_col:
                             st.success("Job Reopened Successfully")
                             st.rerun()
 
-                # NEW FEATURE: The Job Description Expander inside the Grid!
+                # The Job Description Expander inside the Grid!
                 with st.expander("👁️ View Job Requirements & Description"):
                     e_col1, e_col2 = st.columns(2)
                     e_col1.markdown(f"**Target Experience:** {row.get('experience_min_year', 0)} to {row.get('experience_max_year', 0)} Years")
