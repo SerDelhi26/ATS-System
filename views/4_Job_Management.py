@@ -338,7 +338,8 @@ if is_admin:
                     "performa_invoice_status": performa_invoice_status,
                     "invoice_no": invoice_no,
                     "invoice_status": invoice_status,
-                    "remark": remark
+                    "remark": remark,
+                    "created_by": st.session_state.user_id
                 }
 
                 if editing_job:
