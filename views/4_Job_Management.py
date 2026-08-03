@@ -64,7 +64,6 @@ def get_categories():
 def get_sub_categories(category_id):
     return supabase.table("sub_category_master").select("*").eq("category_id", category_id).execute().data
 
-# NEW: Fetch all subcategories for the global filter lookup
 @st.cache_data
 def get_all_sub_categories():
     return supabase.table("sub_category_master").select("*").execute().data
@@ -164,7 +163,7 @@ if is_admin:
                     st.warning("Job Title already exists.")
                 else:
                     supabase.table("job_title_master").insert({"job_title_name": new_job_title}).execute()
-                    get_job_titles.clear()
+                    st.cache_data.clear() # Fixed: Using Streamlit's global cache clearer
                     st.success("Job Title created.")
                     st.rerun()
 
@@ -187,7 +186,7 @@ if is_admin:
                     st.warning("Company already exists.")
                 else:
                     supabase.table("company_master").insert({"company_name": new_company}).execute()
-                    get_companies.clear()
+                    st.cache_data.clear() # Fixed: Using Streamlit's global cache clearer
                     st.success("Company created.")
                     st.rerun()
 
@@ -210,7 +209,7 @@ if is_admin:
                     st.warning("Category already exists.")
                 else:
                     supabase.table("category_master").insert({"category_name": new_category}).execute()
-                    get_categories.clear()
+                    st.cache_data.clear() # Fixed: Using Streamlit's global cache clearer
                     st.success("Category created.")
                     st.rerun()
 
@@ -235,6 +234,7 @@ if is_admin:
             new_sub_category = st.text_input("New Sub Category", key=get_key("new_subcat_input"))
             if st.button("Save Sub Category", key=get_key("save_subcat_btn")):
                 supabase.table("sub_category_master").insert({"category_id": category_record["category_id"], "sub_category_name": new_sub_category}).execute()
+                st.cache_data.clear() # Added clear for subcategories as well
                 st.success("Sub Category created.")
                 st.rerun()
 
