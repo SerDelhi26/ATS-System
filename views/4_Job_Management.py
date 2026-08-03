@@ -49,22 +49,23 @@ if st.session_state.get("success_message"):
 # FUNCTIONS
 # ==========================
 
-@st.cache_data
+@st.cache_data(ttl=300)
 def get_job_titles():
     return supabase.table("job_title_master").select("*").execute().data
 
-@st.cache_data
+@st.cache_data(ttl=300)
 def get_companies():
     return supabase.table("company_master").select("*").execute().data
 
-@st.cache_data
+@st.cache_data(ttl=300)
 def get_categories():
     return supabase.table("category_master").select("*").execute().data
 
 def get_sub_categories(category_id):
     return supabase.table("sub_category_master").select("*").eq("category_id", category_id).execute().data
 
-@st.cache_data
+# NEW: Fetch all subcategories for the global filter lookup
+@st.cache_data(ttl=300)
 def get_all_sub_categories():
     return supabase.table("sub_category_master").select("*").execute().data
 
@@ -163,7 +164,7 @@ if is_admin:
                     st.warning("Job Title already exists.")
                 else:
                     supabase.table("job_title_master").insert({"job_title_name": new_job_title}).execute()
-                    st.cache_data.clear() # Fixed: Using Streamlit's global cache clearer
+                    st.cache_data.clear() # THE FIX: Globablly clears cache so next run gets fresh data
                     st.success("Job Title created.")
                     st.rerun()
 
@@ -186,7 +187,7 @@ if is_admin:
                     st.warning("Company already exists.")
                 else:
                     supabase.table("company_master").insert({"company_name": new_company}).execute()
-                    st.cache_data.clear() # Fixed: Using Streamlit's global cache clearer
+                    st.cache_data.clear() # THE FIX
                     st.success("Company created.")
                     st.rerun()
 
@@ -209,7 +210,7 @@ if is_admin:
                     st.warning("Category already exists.")
                 else:
                     supabase.table("category_master").insert({"category_name": new_category}).execute()
-                    st.cache_data.clear() # Fixed: Using Streamlit's global cache clearer
+                    st.cache_data.clear() # THE FIX
                     st.success("Category created.")
                     st.rerun()
 
@@ -234,7 +235,7 @@ if is_admin:
             new_sub_category = st.text_input("New Sub Category", key=get_key("new_subcat_input"))
             if st.button("Save Sub Category", key=get_key("save_subcat_btn")):
                 supabase.table("sub_category_master").insert({"category_id": category_record["category_id"], "sub_category_name": new_sub_category}).execute()
-                st.cache_data.clear() # Added clear for subcategories as well
+                st.cache_data.clear() # THE FIX
                 st.success("Sub Category created.")
                 st.rerun()
 
@@ -345,7 +346,7 @@ if is_admin:
                     "invoice_no": invoice_no,
                     "invoice_status": invoice_status,
                     "remark": remark,
-                    "created_by": st.session_state.user_id # Ensuring ownership is attached
+                    "created_by": st.session_state.user_id 
                 }
 
                 if editing_job:
@@ -441,7 +442,6 @@ with right_col:
     assignments = supabase.table("job_assignment").select("*").execute()
     assignments_data = assignments.data
 
-    # Fetch Jobs based on Role (added sub_category_id to select)
     select_query = """
         job_id, job_reference_no, job_title_id, company_id, category_id, sub_category_id, location, openings, job_status, job_document_path,
         experience_min_year, experience_max_year, pay_min, pay_max, currency, skills_required, job_description
@@ -469,7 +469,7 @@ with right_col:
 
     jobs_df = pd.DataFrame(jobs.data)
 
-    # Apply Search & Dropdown Filters (with empty dataframe safety check)
+    # Apply Search & Dropdown Filters
     if not jobs_df.empty and search_text:
         matching_job_titles = [jid for jid, title in job_titles_lookup.items() if search_text.lower() in title.lower()]
         matching_companies = [cid for cid, company in companies_lookup.items() if search_text.lower() in company.lower()]
