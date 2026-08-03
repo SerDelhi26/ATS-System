@@ -49,15 +49,15 @@ if st.session_state.get("success_message"):
 # FUNCTIONS
 # ==========================
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=10)
 def get_job_titles():
     return supabase.table("job_title_master").select("*").execute().data
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=10)
 def get_companies():
     return supabase.table("company_master").select("*").execute().data
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=10)
 def get_categories():
     return supabase.table("category_master").select("*").execute().data
 
@@ -65,7 +65,7 @@ def get_sub_categories(category_id):
     return supabase.table("sub_category_master").select("*").eq("category_id", category_id).execute().data
 
 # NEW: Fetch all subcategories for the global filter lookup
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=10)
 def get_all_sub_categories():
     return supabase.table("sub_category_master").select("*").execute().data
 
