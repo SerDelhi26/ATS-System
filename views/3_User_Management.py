@@ -130,7 +130,7 @@ if st.session_state.get("reset_user_id"):
                 )
 
                 st.session_state.reset_user_id = None
-
+                st.cache_data.clear()
                 st.rerun()
 
         if col2.button(
@@ -170,16 +170,6 @@ if st.session_state.edit_user_id:
 # ==============================
 
 left_col, right_col = st.columns([1, 3])
-
-st.markdown("""
-<div style="
-background:white;
-padding:15px;
-border-radius:12px;
-box-shadow:0px 2px 8px rgba(0,0,0,0.08);
-">
-""",
-unsafe_allow_html=True)
 
 # ==============================
 # LEFT PANEL
@@ -467,26 +457,38 @@ with left_col:
 
                         st.session_state.user_success_msg = "User added successfully."
 
+                    st.cache_data.clear()
                     st.rerun()
 
                 except Exception as e:
 
                     st.error(str(e))
 
-st.markdown(
-    "</div>",
-    unsafe_allow_html=True
-)
+@st.cache_data(ttl=10)
+def get_all_users():
+    return (
+        supabase
+        .table("users")
+        .select(
+            """
+            user_id,
+            full_name,
+            email,
+            role,
+            status
+            """
+        )
+        .order("user_id")
+        .execute()
+        .data or []
+    )
 
 # ==============================
 # RIGHT PANEL
 # ==============================
 
 with right_col:
-
-    st.markdown(
-        "## 📋 Employee Directory"
-    )
+    st.markdown("## 📋 Employee Directory")
 
     search_text = st.text_input(
         "🔍 Search Employee",
@@ -494,47 +496,22 @@ with right_col:
     )
 
     col1, col2 = st.columns(2)
-
     with col1:
-
         role_filter = st.selectbox(
             "Role Filter",
-            ["All",
-             "Admin",
-             "Recruiter"]
+            ["All", "Admin", "Recruiter"]
         )
-
     with col2:
-
         status_filter = st.selectbox(
             "Status Filter",
-            ["All",
-             "Active",
-             "Inactive"]
+            ["All", "Active", "Inactive"]
         )
 
     try:
-
-        result = (
-            supabase
-            .table("users")
-            .select(
-                """
-                user_id,
-                full_name,
-                email,
-                role,
-                status
-                """
-            )
-            .order("user_id")
-            .execute()
-        )
-
-        df = pd.DataFrame(result.data)
+        users_data = get_all_users()
+        df = pd.DataFrame(users_data)
 
         if not df.empty:
-
             if search_text:
                 df = df[
                     df["full_name"].str.contains(search_text, case=False, na=False) |
@@ -542,25 +519,14 @@ with right_col:
                 ]
 
             if role_filter != "All":
-
-                df = df[
-                    df["role"]
-                    == role_filter
-                ]
+                df = df[df["role"] == role_filter]
 
             if status_filter != "All":
-
-                df = df[
-                    df["status"]
-                    == status_filter
-                ]
+                df = df[df["status"] == status_filter]
 
             display_df, current_page, total_pages = render_pagination(df, page_size_default=25, key_prefix="users")
 
-            header = st.columns(
-                [0.5,2,3,1.5,1.5,1,1,1]
-            )
-
+            header = st.columns([0.5, 2, 3, 1.5, 1.5, 1, 1, 1])
             header[0].markdown("**ID**")
             header[1].markdown("**Name**")
             header[2].markdown("**Email**")
@@ -573,88 +539,37 @@ with right_col:
             st.divider()
 
             for _, row in display_df.iterrows():
-
-                cols = st.columns(
-                    [0.5,2,3,1.5,1.5,1,1,1]
-                )
-
-                cols[0].write(
-                    row["user_id"]
-                )
-
-                cols[1].write(
-                    row["full_name"]
-                )
-
-                cols[2].write(
-                    row["email"]
-                )
-
-                cols[3].write(
-                    row["role"]
-                )
+                cols = st.columns([0.5, 2, 3, 1.5, 1.5, 1, 1, 1])
+                cols[0].write(row["user_id"])
+                cols[1].write(row["full_name"])
+                cols[2].write(row["email"])
+                cols[3].write(row["role"])
 
                 status = row["status"]
-
                 if status == "Active":
-
                     cols[4].markdown(
-                        """
-                        <span style="
-                        background:#16A34A;
-                        color:white;
-                        padding:4px 10px;
-                        border-radius:10px;
-                        ">
-                        Active
-                        </span>
-                        """,
+                        "<span style='background:#16A34A; color:white; padding:4px 10px; border-radius:10px; font-weight:600;'>Active</span>",
                         unsafe_allow_html=True
                     )
-
                 else:
-
                     cols[4].markdown(
-                        """
-                        <span style="
-                        background:#DC2626;
-                        color:white;
-                        padding:4px 10px;
-                        border-radius:10px;
-                        ">
-                        Inactive
-                        </span>
-                        """,
+                        "<span style='background:#DC2626; color:white; padding:4px 10px; border-radius:10px; font-weight:600;'>Inactive</span>",
                         unsafe_allow_html=True
                     )
-
 
                 # Edit Button
-                if cols[5].button(
-                    "✏️",
-                    key=f"edit_{row['user_id']}"
-                ):
+                if cols[5].button("✏️", key=f"edit_{row['user_id']}", help="Edit User"):
                     st.session_state.edit_user_id = row["user_id"]
-
                     st.rerun()
+
                 # Reset Password
-                if cols[6].button(
-                    "🔑",
-                    key=f"reset_{row['user_id']}"
-                ):
-                    st.session_state.reset_user_id = (
-                        row["user_id"]
-                    )
+                if cols[6].button("🔑", key=f"reset_{row['user_id']}", help="Reset Password"):
+                    st.session_state.reset_user_id = row["user_id"]
                     st.rerun()
 
                 # Active User
                 if row["status"] == "Active":
-
-                    if cols[7].button(
-                        "🔒",
-                        key=f"deactivate_{row['user_id']}"
-                    ):
-
+                    if cols[7].button("🔒", key=f"deactivate_{row['user_id']}", help="Deactivate User"):
                         (
                             supabase
                             .table("users")
@@ -662,27 +577,14 @@ with right_col:
                                 "status": "Inactive",
                                 "relieving_date": str(date.today())
                             })
-                            .eq(
-                                "user_id",
-                                row["user_id"]
-                            )
+                            .eq("user_id", row["user_id"])
                             .execute()
                         )
-
-                        st.success(
-                            f"{row['full_name']} deactivated successfully."
-                        )
-
+                        st.success(f"{row['full_name']} deactivated successfully.")
+                        st.cache_data.clear()
                         st.rerun()
-
-                # Inactive User
                 else:
-
-                    if cols[7].button(
-                        "🔓",
-                        key=f"activate_{row['user_id']}"
-                    ):
-
+                    if cols[7].button("🔓", key=f"activate_{row['user_id']}", help="Activate User"):
                         (
                             supabase
                             .table("users")
@@ -690,25 +592,14 @@ with right_col:
                                 "status": "Active",
                                 "relieving_date": None
                             })
-                            .eq(
-                                "user_id",
-                                row["user_id"]
-                            )
+                            .eq("user_id", row["user_id"])
                             .execute()
                         )
-
-                        st.success(
-                            f"{row['full_name']} activated successfully."
-                        )
-
+                        st.success(f"{row['full_name']} activated successfully.")
+                        st.cache_data.clear()
                         st.rerun()
-
         else:
-
-            st.info(
-                "No employees found."
-            )
+            st.info("No employees found.")
 
     except Exception as e:
-
         st.error(str(e))

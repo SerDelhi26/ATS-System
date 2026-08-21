@@ -67,15 +67,16 @@ st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 # ==========================
 # DATA FETCHING
 # ==========================
+@st.cache_data(ttl=15)
 def get_dashboard_data():
-    jobs = supabase.table("job_management").select("job_id, job_reference_no, job_status, openings, company_id, job_title_id").execute().data
-    candidates = supabase.table("candidate_management").select("candidate_id, candidate_reference_no, first_name, last_name, job_id, current_stage, candidate_status, created_by_name, created_on").execute().data
-    interviews = supabase.table("interview_management").select("interview_id, candidate_id, interview_status, created_by_name").execute().data
-    offers = supabase.table("offer_management").select("candidate_id, offer_status, offered_ctc").execute().data
-    recruiters = supabase.table("users").select("user_id, full_name").eq("role", "Recruiter").execute().data
-    job_titles = supabase.table("job_title_master").select("job_title_id, job_title_name").execute().data
-    companies = supabase.table("company_master").select("company_id, company_name").execute().data
-    job_assignments = supabase.table("job_assignment").select("job_id, user_id").execute().data
+    jobs = supabase.table("job_management").select("job_id, job_reference_no, job_status, openings, company_id, job_title_id, created_date, created_by").execute().data or []
+    candidates = supabase.table("candidate_management").select("candidate_id, candidate_reference_no, first_name, last_name, job_id, current_stage, candidate_status, created_by_name, created_on").execute().data or []
+    interviews = supabase.table("interview_management").select("interview_id, candidate_id, interview_status, created_by_name").execute().data or []
+    offers = supabase.table("offer_management").select("candidate_id, offer_status, offered_ctc").execute().data or []
+    recruiters = supabase.table("users").select("user_id, full_name").eq("role", "Recruiter").execute().data or []
+    job_titles = supabase.table("job_title_master").select("job_title_id, job_title_name").execute().data or []
+    companies = supabase.table("company_master").select("company_id, company_name").execute().data or []
+    job_assignments = supabase.table("job_assignment").select("job_id, user_id").execute().data or []
     
     return jobs, candidates, interviews, offers, recruiters, job_titles, companies, job_assignments
 

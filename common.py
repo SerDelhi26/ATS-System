@@ -1,12 +1,39 @@
+import os
+import base64
 import streamlit as st
 from db import supabase
 
+def render_logo(width=220, align="left"):
+    """
+    Renders the unified 1 Point Solution company logo with 100% alpha transparency.
+    """
+    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo.png")
+    if not os.path.exists(logo_path):
+        return
+        
+    try:
+        with open(logo_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("utf-8")
+            
+        st.markdown(
+            f"""
+            <div class="ats-logo-wrapper" style="text-align: {align}; margin-bottom: 12px;">
+                <img src="data:image/png;base64,{b64}" style="width: {width}px; max-width: 100%; height: auto;" />
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    except Exception:
+        pass
+
 def show_user_profile():
-    """Displays the logged-in user's name and role at the top of the sidebar."""
-    if st.session_state.get("logged_in", False):
-        name = st.session_state.get("user_name", "User")
-        role = st.session_state.get("user_role", "")
-        with st.sidebar:
+    """Displays company logo and the logged-in user's name and role at the top of the sidebar."""
+    with st.sidebar:
+        render_logo(width=200, align="center")
+
+        if st.session_state.get("logged_in", False):
+            name = st.session_state.get("user_name", "User")
+            role = st.session_state.get("user_role", "")
             st.markdown(f"👤 **{name}**")
             st.caption(f"Role: {role}")
             st.markdown("---")
@@ -16,6 +43,40 @@ def show_logout():
     if st.button("🚪 Logout", use_container_width=True):
         st.session_state.clear()
         st.rerun()
+
+@st.cache_data(ttl=20)
+def get_recruiter_notification_data(user_id):
+    """Cached helper to fetch assigned open jobs, candidate submissions, and lookups for notifications."""
+    assignments = supabase.table("job_assignment").select("job_id").eq("user_id", user_id).execute().data or []
+    assigned_job_ids = [a["job_id"] for a in assignments]
+    if not assigned_job_ids:
+        return [], set(), {}, {}
+    
+    jobs = (
+        supabase.table("job_management")
+        .select("job_id, job_reference_no, job_status, job_title_id, company_id, location, experience_min_year, experience_max_year, pay_min, pay_max, currency, skills_required, job_description")
+        .in_("job_id", assigned_job_ids)
+        .eq("job_status", "Open")
+        .execute()
+        .data or []
+    )
+    
+    candidates_added = (
+        supabase.table("candidate_management")
+        .select("job_id")
+        .eq("created_by_user_id", user_id)
+        .in_("job_id", assigned_job_ids)
+        .execute()
+        .data or []
+    )
+    jobs_with_candidates = {c["job_id"] for c in candidates_added}
+    
+    job_titles = supabase.table("job_title_master").select("job_title_id, job_title_name").execute().data or []
+    companies = supabase.table("company_master").select("company_id, company_name").execute().data or []
+    title_lookup = {t["job_title_id"]: t["job_title_name"] for t in job_titles}
+    company_lookup = {c["company_id"]: c["company_name"] for c in companies}
+    
+    return jobs, jobs_with_candidates, title_lookup, company_lookup
 
 def show_job_notifications():
     """Renders a notification bell in the sidebar for newly assigned jobs."""
@@ -29,36 +90,13 @@ def show_job_notifications():
         return
 
     try:
-        # 1. Get Assigned Jobs
-        assignments = supabase.table("job_assignment").select("job_id").eq("user_id", user_id).execute().data
-        assigned_job_ids = [a["job_id"] for a in assignments]
+        jobs, jobs_with_candidates, title_lookup, company_lookup = get_recruiter_notification_data(user_id)
         
-        if not assigned_job_ids:
+        if not jobs:
             with st.sidebar:
                 st.markdown("---")
                 st.markdown("🔔 **Notifications:** No jobs assigned.")
             return
-
-        # 2. Get Open Jobs (Fetch full details for the View Details feature)
-        jobs = (
-            supabase.table("job_management")
-            .select("*")
-            .in_("job_id", assigned_job_ids)
-            .eq("job_status", "Open")
-            .execute()
-            .data
-        )
-        
-        # 3. Smart Condition: Check which assigned jobs the user HAS submitted candidates for
-        candidates_added = (
-            supabase.table("candidate_management")
-            .select("job_id")
-            .eq("created_by_user_id", user_id)
-            .in_("job_id", assigned_job_ids)
-            .execute()
-            .data
-        )
-        jobs_with_candidates = {c["job_id"] for c in candidates_added}
 
         if "seen_job_ids" not in st.session_state:
             st.session_state.seen_job_ids = []
@@ -77,19 +115,12 @@ def show_job_notifications():
             if count > 0:
                 with st.expander(f"🔔 New Jobs ({count})", expanded=True):
                     st.markdown(f"**You have {count} newly assigned job(s):**")
-                    
-                    # Only fetch lookup tables if there are unseen jobs to render
-                    job_titles = supabase.table("job_title_master").select("*").execute().data
-                    companies = supabase.table("company_master").select("*").execute().data
-                    title_lookup = {t["job_title_id"]: t["job_title_name"] for t in job_titles}
-                    company_lookup = {c["company_id"]: c["company_name"] for c in companies}
 
                     for j in unseen_jobs:
                         col1, col2 = st.columns([0.6, 0.4])
                         col1.markdown(f"<div style='margin-top: 8px;'>📌 <b>{j['job_reference_no']}</b></div>", unsafe_allow_html=True)
                         
                         with col2:
-                            # Streamlit popover creates a button that opens a floating container with details
                             with st.popover("👁️ View", use_container_width=True):
                                 st.markdown(f"**Job No:** {j['job_reference_no']}")
                                 st.markdown(f"**Title:** {title_lookup.get(j.get('job_title_id'), 'N/A')}")
@@ -107,7 +138,7 @@ def show_job_notifications():
             else:
                 st.markdown("🔔 **Notifications:** All caught up!")
 
-    except Exception as e:
+    except Exception:
         pass
 
 

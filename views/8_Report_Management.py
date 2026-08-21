@@ -33,18 +33,18 @@ st.markdown("# 📊 ATS Master Report")
 # ==========================
 # OPTIMIZED FUNCTIONS (Targeted Columns)
 # ==========================
+@st.cache_data(ttl=20)
 def get_report_data():
     try:
         # Fetch only necessary columns to keep network payloads lightweight
-        candidates = supabase.table("candidate_management").select("candidate_id, candidate_reference_no, first_name, last_name, job_id, created_by_name, email, mobile_no, experience_years, experience_months, current_stage, created_on").execute().data
-        jobs = supabase.table("job_management").select("job_id, job_reference_no, job_title_id").execute().data
-        job_titles = supabase.table("job_title_master").select("job_title_id, job_title_name").execute().data
-        interviews = supabase.table("interview_management").select("candidate_id, interview_round, interview_status, interview_date").execute().data
-        offers = supabase.table("offer_management").select("candidate_id, offer_status, offered_ctc, joining_date").execute().data
+        candidates = supabase.table("candidate_management").select("candidate_id, candidate_reference_no, first_name, last_name, job_id, created_by_name, email, mobile_no, experience_years, experience_months, current_stage, created_on").execute().data or []
+        jobs = supabase.table("job_management").select("job_id, job_reference_no, job_title_id").execute().data or []
+        job_titles = supabase.table("job_title_master").select("job_title_id, job_title_name").execute().data or []
+        interviews = supabase.table("interview_management").select("candidate_id, interview_round, interview_status, interview_date").execute().data or []
+        offers = supabase.table("offer_management").select("candidate_id, offer_status, offered_ctc, joining_date").execute().data or []
         
         return candidates, jobs, job_titles, interviews, offers
     except Exception as e:
-        st.error(f"Error loading report data: {e}")
         return [], [], [], [], []
 
 def parse_date(date_str):

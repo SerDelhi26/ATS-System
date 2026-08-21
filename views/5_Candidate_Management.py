@@ -61,6 +61,7 @@ def normalize_phone(phone):
     return digits[-10:] if len(digits) >= 10 else digits
 
 
+@st.cache_data(ttl=15)
 def get_jobs_for_user(
     user_id,
     user_role
@@ -73,7 +74,7 @@ def get_jobs_for_user(
             .select("job_id, job_reference_no, job_title_id, company_id, category_id, sub_category_id")
             .eq("job_status", "Open")
             .execute()
-            .data
+            .data or []
         )
     else:
         assigned = (
@@ -82,7 +83,7 @@ def get_jobs_for_user(
             .select("job_id")
             .eq("user_id", user_id)
             .execute()
-            .data
+            .data or []
         )
 
         job_ids = [
@@ -100,17 +101,27 @@ def get_jobs_for_user(
             .in_("job_id", job_ids)
             .eq("job_status", "Open")
             .execute()
-            .data
+            .data or []
         )
 
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=15)
 def get_categories():
-    return supabase.table("category_master").select("*").execute().data
+    return supabase.table("category_master").select("*").execute().data or []
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=15)
 def get_sub_categories():
-    return supabase.table("sub_category_master").select("*").execute().data
+    return supabase.table("sub_category_master").select("*").execute().data or []
+
+@st.cache_data(ttl=15)
+def get_all_jobs_summary():
+    return (
+        supabase
+        .table("job_management")
+        .select("job_id, job_reference_no, job_title_id, company_id, category_id, sub_category_id")
+        .execute()
+        .data or []
+    )
 
 def upload_resume(uploaded_file, category_name, sub_category_name, job_ref, file_name):
     return storage.save_candidate_resume(uploaded_file, category_name, sub_category_name, job_ref, custom_name=file_name)
@@ -119,36 +130,36 @@ def get_resume_url(file_path):
     return storage.get_file_path("resumes", file_path)
 
 
+@st.cache_data(ttl=15)
 def get_job_titles():
-
     return (
         supabase
         .table("job_title_master")
         .select("*")
         .execute()
-        .data
+        .data or []
     )
 
 
+@st.cache_data(ttl=15)
 def get_companies():
-
     return (
         supabase
         .table("company_master")
         .select("*")
         .execute()
-        .data
+        .data or []
     )
 
 
+@st.cache_data(ttl=15)
 def get_recruiters():
-
     return (
         supabase
         .table("users")
         .select("full_name")
         .execute()
-        .data
+        .data or []
     )
 
 if "parsed_candidate_data" not in st.session_state:
@@ -408,13 +419,7 @@ with left_col:
         for item in sub_categories
     }
 
-    all_jobs = (
-        supabase
-        .table("job_management")
-        .select("job_id, job_reference_no, job_title_id, company_id, category_id, sub_category_id")
-        .execute()
-        .data
-    )
+    all_jobs = get_all_jobs_summary()
 
     job_display_lookup = {
         job["job_id"]: f"{job['job_reference_no']} | {job_title_lookup.get(job['job_title_id'], '')}"
@@ -1878,7 +1883,7 @@ with right_col:
                         # Match reasons pill box
                         if item["reasons"]:
                             st.markdown(
-                                f"<div style='background:#F8FAFC; border:1px solid #E2E8F0; padding:6px 12px; border-radius:6px; font-size:12px; margin-top:6px; color:#334155;'>"
+                                f"<div style='background:rgba(128, 128, 128, 0.08); border:1px solid rgba(128, 128, 128, 0.2); padding:6px 12px; border-radius:6px; font-size:12px; margin-top:6px;'>"
                                 f"<b>Fit Analysis:</b> {' &nbsp;•&nbsp; '.join(item['reasons'])}"
                                 f"</div>",
                                 unsafe_allow_html=True
@@ -1916,7 +1921,7 @@ with right_col:
                                     deactivate_candidate_dialog(cand["candidate_id"], c_name, is_legacy=is_legacy, legacy_id=cand.get("legacy_candidate_id"), raw_cand_data=cand)
 
                         with act_col4:
-                            st.markdown(f"<div style='font-size:12px; color:#475569; padding-top:6px;'>📞 <b>{cand.get('mobile_no', '-')}</b><br/>✉️ {cand.get('email', '-')}</div>", unsafe_allow_html=True)
+                            st.markdown(f"<div style='font-size:12px; opacity:0.85; padding-top:6px;'>📞 <b>{cand.get('mobile_no', '-')}</b><br/>✉️ {cand.get('email', '-')}</div>", unsafe_allow_html=True)
             else:
                 st.info("No candidates matched your search criteria. Try broadening your keywords or lowering the score threshold.")
         else:
@@ -1991,7 +1996,7 @@ with right_col:
                             j_name = job_display_lookup.get(c_obj.get("job_id"), "Unknown Job")
                             c_date = str(c_obj.get('created_on') or c_obj.get('created_at', ''))[:10]
                             st.markdown(f"""
-                            <div style="background:#F8FAFC; border:1px solid #E2E8F0; padding:10px; border-radius:8px; font-size:13px;">
+                            <div style="background:rgba(128, 128, 128, 0.08); border:1px solid rgba(128, 128, 128, 0.2); padding:10px; border-radius:8px; font-size:13px;">
                                 <b>Ref:</b> {c_obj.get('candidate_reference_no')}<br/>
                                 <b>Name:</b> {c_obj.get('first_name')} {c_obj.get('last_name')}<br/>
                                 <b>Job:</b> {j_name}<br/>

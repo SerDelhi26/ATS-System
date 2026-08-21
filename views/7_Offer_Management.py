@@ -63,29 +63,28 @@ def get_candidates_for_offer():
     )
 
 
+@st.cache_data(ttl=15)
 def get_job_titles():
-
     return (
         supabase
         .table("job_title_master")
         .select("*")
         .execute()
-        .data
+        .data or []
     )
 
+@st.cache_data(ttl=15)
 def get_companies():
-
     return (
         supabase
         .table("company_master")
         .select("*")
         .execute()
-        .data
+        .data or []
     )
 
-
+@st.cache_data(ttl=15)
 def get_jobs():
-
     return (
         supabase
         .table("job_management")
@@ -98,7 +97,7 @@ def get_jobs():
             """
         )
         .execute()
-        .data
+        .data or []
     )
 
 # NO CACHE - Always fetches live data for the right-hand grid!

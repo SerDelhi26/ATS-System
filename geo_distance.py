@@ -158,6 +158,9 @@ LOCATION_ALIASES = {
     "trivandrum": "thiruvananthapuram"
 }
 
+from functools import lru_cache
+
+@lru_cache(maxsize=2048)
 def normalize_loc_string(loc_str):
     """Cleans location string and maps aliases."""
     if not loc_str:
@@ -176,6 +179,7 @@ def normalize_loc_string(loc_str):
             
     return clean
 
+@lru_cache(maxsize=2048)
 def extract_best_city_coords(loc_text):
     """Finds matching city entry in INDIAN_CITIES_COORDS."""
     if not loc_text:
@@ -200,6 +204,7 @@ def extract_best_city_coords(loc_text):
                 
     return None, None
 
+@lru_cache(maxsize=2048)
 def calculate_haversine_distance(coord1, coord2):
     """Calculates great-circle distance in kilometers."""
     lat1, lon1 = coord1[0], coord1[1]
@@ -215,6 +220,7 @@ def calculate_haversine_distance(coord1, coord2):
     distance_km = R * c
     return round(distance_km, 1)
 
+@lru_cache(maxsize=2048)
 def calculate_geo_proximity(job_location, candidate_location):
     """
     Computes distance-tiered geographic proximity score (0.0 to 15.0 pts).

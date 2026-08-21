@@ -1,7 +1,32 @@
+import os
+import base64
 import streamlit as st
 import bcrypt
 from db import supabase
 from theme import apply_theme
+
+def render_logo(width=220, align="left"):
+    """
+    Renders the unified 1 Point Solution company logo with 100% alpha transparency.
+    """
+    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo.png")
+    if not os.path.exists(logo_path):
+        return
+        
+    try:
+        with open(logo_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("utf-8")
+            
+        st.markdown(
+            f"""
+            <div class="ats-logo-wrapper" style="text-align: {align}; margin-bottom: 12px;">
+                <img src="data:image/png;base64,{b64}" style="width: {width}px; max-width: 100%; height: auto;" />
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    except Exception:
+        pass
 
 # ==========================
 # PAGE CONFIG
@@ -30,8 +55,9 @@ if "password_reset_mode" not in st.session_state:
 # ==========================
 def login_view():
     """Encapsulates the login and password reset UI to work seamlessly with the router."""
-    
     if st.session_state.password_reset_mode:
+        render_logo(width=220, align="left")
+            
         st.markdown("# 🔑 Change Password")
         st.info("Enter your current password and choose a new password.")
         
@@ -83,6 +109,8 @@ def login_view():
                     st.error(f"Error: {str(e)}")
         
         return
+
+    render_logo(width=240, align="left")
 
     st.markdown("# 🔐 Welcome to ATS Login")
     st.markdown("Please sign in to continue.")

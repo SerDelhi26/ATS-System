@@ -17,6 +17,14 @@ def apply_theme():
         color: white;
     }
 
+    /* Hide Streamlit auto-injected page search bar in sidebar */
+    [data-testid="stSidebarNavSearch"],
+    section[data-testid="stSidebar"] [data-testid="stSidebarNav"] input,
+    section[data-testid="stSidebar"] [data-testid="stSidebarNav"] > div:has(input),
+    div[data-testid="stSidebarNavItems"] + div {
+        display: none !important;
+    }
+
     </style>
     """,
     unsafe_allow_html=True)

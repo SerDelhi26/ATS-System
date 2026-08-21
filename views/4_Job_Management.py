@@ -46,6 +46,9 @@ if "selected_job_doc" not in st.session_state:
 if "form_reset_job" not in st.session_state:
     st.session_state.form_reset_job = 0
 
+if "pop_reset_ver" not in st.session_state:
+    st.session_state.pop_reset_ver = 0
+
 if st.session_state.get("success_message"):
     st.success(st.session_state.get("success_message"))
     st.session_state.success_message = None
@@ -283,6 +286,75 @@ def get_job_by_id(job_id):
     result = supabase.table("job_management").select("*").eq("job_id", job_id).single().execute()
     return result.data
 
+@st.dialog("✏️ Master Records Spelling Correction", width="large")
+def master_data_editor_dialog():
+    st.markdown("### ✏️ Master Data Spelling & Name Correction")
+    st.info("ℹ️ **Edit-Only Mode:** Deletion is permanently disabled to maintain relational database integrity across historical jobs, candidates, and reports.")
+
+    tab_jt, tab_co = st.tabs([
+        "💼 Job Titles",
+        "🏢 Companies"
+    ])
+
+    # TAB 1: JOB TITLES
+    with tab_jt:
+        curr_titles = supabase.table("job_title_master").select("*").order("job_title_name").execute().data or []
+        if not curr_titles:
+            st.info("No job titles registered yet.")
+        else:
+            jt_options = {f"{item['job_title_name']} (ID: {item['job_title_id']})": item for item in curr_titles}
+            selected_label = st.selectbox("Select Job Title to Correct", list(jt_options.keys()), key="dlg_sel_jt_master")
+            selected_item = jt_options[selected_label]
+            corrected_val = st.text_input("Corrected Job Title Name", value=selected_item["job_title_name"], key="dlg_val_jt_master")
+
+            if st.button("💾 Save Job Title Correction", type="primary", use_container_width=True, key="dlg_btn_save_jt_master"):
+                clean = corrected_val.strip()
+                if not clean:
+                    st.error("Job title name cannot be empty.")
+                elif clean == selected_item["job_title_name"]:
+                    st.info("No changes made.")
+                else:
+                    dup = supabase.table("job_title_master").select("*").ilike("job_title_name", clean).neq("job_title_id", selected_item["job_title_id"]).execute()
+                    if dup.data:
+                        st.warning(f"A job title named '{clean}' already exists.")
+                    else:
+                        supabase.table("job_title_master").update({
+                            "job_title_name": clean,
+                            "modified_date": datetime.now().isoformat()
+                        }).eq("job_title_id", selected_item["job_title_id"]).execute()
+                        st.cache_data.clear()
+                        st.toast(f"Job Title successfully corrected to '{clean}'!", icon="✅")
+                        st.rerun()
+
+    # TAB 2: COMPANIES
+    with tab_co:
+        curr_companies = supabase.table("company_master").select("*").order("company_name").execute().data or []
+        if not curr_companies:
+            st.info("No companies registered yet.")
+        else:
+            co_options = {f"{item['company_name']} (ID: {item['company_id']})": item for item in curr_companies}
+            selected_co_label = st.selectbox("Select Company to Correct", list(co_options.keys()), key="dlg_sel_co_master")
+            selected_co_item = co_options[selected_co_label]
+            corrected_co_val = st.text_input("Corrected Company Name", value=selected_co_item["company_name"], key="dlg_val_co_master")
+
+            if st.button("💾 Save Company Correction", type="primary", use_container_width=True, key="dlg_btn_save_co_master"):
+                clean = corrected_co_val.strip()
+                if not clean:
+                    st.error("Company name cannot be empty.")
+                elif clean == selected_co_item["company_name"]:
+                    st.info("No changes made.")
+                else:
+                    dup = supabase.table("company_master").select("*").ilike("company_name", clean).neq("company_id", selected_co_item["company_id"]).execute()
+                    if dup.data:
+                        st.warning(f"A company named '{clean}' already exists.")
+                    else:
+                        supabase.table("company_master").update({
+                            "company_name": clean
+                        }).eq("company_id", selected_co_item["company_id"]).execute()
+                        st.cache_data.clear()
+                        st.toast(f"Company successfully corrected to '{clean}'!", icon="✅")
+                        st.rerun()
+
 # Fetch core dependencies for lookup tables
 job_titles = get_job_titles()
 companies = get_companies()
@@ -322,6 +394,10 @@ if is_admin:
             st.success(st.session_state.success_message)
             del st.session_state.success_message
 
+        # Admin Master Data Correction Quick-Access
+        if st.button("⚙️ Correct Master Data (Titles / Companies)", use_container_width=True, help="Correct spelling mistakes in Master Records (Edit only, deletion disabled)"):
+            master_data_editor_dialog()
+
         st.subheader("Edit Job" if editing_job else "Create Job")
 
         assigned_recruiters = []
@@ -339,8 +415,18 @@ if is_admin:
             key=get_key("selected_recruiters")
         )
 
-        # --- JOB TITLE WITH QUICK-ADD POPOVER ---
-        col_jt, col_btn_jt = st.columns([0.82, 0.18])
+        # --- PRE-WIDGET PENDING SELECTION HANDLER ---
+        if "pending_job_title" in st.session_state:
+            st.session_state[get_key("job_title")] = st.session_state.pop("pending_job_title")
+        if "pending_company" in st.session_state:
+            st.session_state[get_key("company")] = st.session_state.pop("pending_company")
+        if "pending_category" in st.session_state:
+            st.session_state[get_key("category")] = st.session_state.pop("pending_category")
+        if "pending_sub_category" in st.session_state:
+            st.session_state[get_key("sub_category")] = st.session_state.pop("pending_sub_category")
+
+        # --- JOB TITLE WITH QUICK-ADD & QUICK-EDIT POPOVERS ---
+        col_jt, col_btn_jt, col_btn_edit_jt = st.columns([0.74, 0.13, 0.13])
         job_title_names = ["-- Select Job Title --"] + [item["job_title_name"] for item in job_titles]
         if editing_job:
             default_job_title = next((item["job_title_name"] for item in job_titles if item["job_title_id"] == editing_job["job_title_id"]), job_title_names[0])
@@ -358,7 +444,7 @@ if is_admin:
             )
         with col_btn_jt:
             st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-            with st.popover("➕", help="Add New Job Title"):
+            with st.popover("➕", help="Add New Job Title", key=f"pop_jt_add_{st.session_state.pop_reset_ver}"):
                 st.markdown("**Add New Job Title**")
                 new_jt_name = st.text_input("Title Name", key=get_key("pop_new_jt"))
                 if st.button("Save Title", key=get_key("pop_btn_save_jt"), type="primary", use_container_width=True):
@@ -371,12 +457,42 @@ if is_admin:
                         else:
                             supabase.table("job_title_master").insert({"job_title_name": new_jt_name.strip()}).execute()
                             st.cache_data.clear()
-                            st.session_state[get_key("job_title")] = new_jt_name.strip()
+                            st.session_state["pending_job_title"] = new_jt_name.strip()
+                            st.session_state.pop_reset_ver += 1
                             st.toast(f"Job Title '{new_jt_name.strip()}' added & selected!", icon="✅")
                             st.rerun()
+        with col_btn_edit_jt:
+            st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+            with st.popover("✏️", help="Edit Selected Job Title", key=f"pop_jt_edit_{st.session_state.pop_reset_ver}"):
+                if not selected_job_title or selected_job_title == "-- Select Job Title --":
+                    st.info("Select a Job Title from the dropdown to edit.")
+                else:
+                    st.markdown("**✏️ Edit Job Title**")
+                    sel_jt_rec = next((item for item in job_titles if item["job_title_name"] == selected_job_title), None)
+                    edit_jt_name = st.text_input("Correct Title Name", value=selected_job_title, key=get_key("pop_edit_jt"))
+                    if st.button("Update Title", key=get_key("pop_btn_update_jt"), type="primary", use_container_width=True):
+                        clean_jt = edit_jt_name.strip()
+                        if not clean_jt:
+                            st.error("Cannot be empty")
+                        elif clean_jt == selected_job_title:
+                            st.info("No changes made")
+                        elif sel_jt_rec:
+                            existing = supabase.table("job_title_master").select("*").ilike("job_title_name", clean_jt).neq("job_title_id", sel_jt_rec["job_title_id"]).execute()
+                            if existing.data:
+                                st.warning("Another job title with this name already exists")
+                            else:
+                                supabase.table("job_title_master").update({
+                                    "job_title_name": clean_jt,
+                                    "modified_date": datetime.now().isoformat()
+                                }).eq("job_title_id", sel_jt_rec["job_title_id"]).execute()
+                                st.cache_data.clear()
+                                st.session_state["pending_job_title"] = clean_jt
+                                st.session_state.pop_reset_ver += 1
+                                st.toast(f"Job Title corrected to '{clean_jt}'!", icon="✅")
+                                st.rerun()
 
-        # --- COMPANY WITH QUICK-ADD POPOVER ---
-        col_co, col_btn_co = st.columns([0.82, 0.18])
+        # --- COMPANY WITH QUICK-ADD & QUICK-EDIT POPOVERS ---
+        col_co, col_btn_co, col_btn_edit_co = st.columns([0.74, 0.13, 0.13])
         company_names = ["-- Select Company --"] + [item["company_name"] for item in companies]
         if editing_job:
             default_company = next((item["company_name"] for item in companies if item["company_id"] == editing_job["company_id"]), company_names[0])
@@ -394,7 +510,7 @@ if is_admin:
             )
         with col_btn_co:
             st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-            with st.popover("➕", help="Add New Company"):
+            with st.popover("➕", help="Add New Company", key=f"pop_co_add_{st.session_state.pop_reset_ver}"):
                 st.markdown("**Add New Company**")
                 new_co_name = st.text_input("Company Name", key=get_key("pop_new_co"))
                 if st.button("Save Company", key=get_key("pop_btn_save_co"), type="primary", use_container_width=True):
@@ -407,9 +523,38 @@ if is_admin:
                         else:
                             supabase.table("company_master").insert({"company_name": new_co_name.strip()}).execute()
                             st.cache_data.clear()
-                            st.session_state[get_key("company")] = new_co_name.strip()
+                            st.session_state["pending_company"] = new_co_name.strip()
+                            st.session_state.pop_reset_ver += 1
                             st.toast(f"Company '{new_co_name.strip()}' added & selected!", icon="✅")
                             st.rerun()
+        with col_btn_edit_co:
+            st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+            with st.popover("✏️", help="Edit Selected Company", key=f"pop_co_edit_{st.session_state.pop_reset_ver}"):
+                if not selected_company or selected_company == "-- Select Company --":
+                    st.info("Select a Company from the dropdown to edit.")
+                else:
+                    st.markdown("**✏️ Edit Company**")
+                    sel_co_rec = next((item for item in companies if item["company_name"] == selected_company), None)
+                    edit_co_name = st.text_input("Correct Company Name", value=selected_company, key=get_key("pop_edit_co"))
+                    if st.button("Update Company", key=get_key("pop_btn_update_co"), type="primary", use_container_width=True):
+                        clean_co = edit_co_name.strip()
+                        if not clean_co:
+                            st.error("Cannot be empty")
+                        elif clean_co == selected_company:
+                            st.info("No changes made")
+                        elif sel_co_rec:
+                            existing = supabase.table("company_master").select("*").ilike("company_name", clean_co).neq("company_id", sel_co_rec["company_id"]).execute()
+                            if existing.data:
+                                st.warning("Another company with this name already exists")
+                            else:
+                                supabase.table("company_master").update({
+                                    "company_name": clean_co
+                                }).eq("company_id", sel_co_rec["company_id"]).execute()
+                                st.cache_data.clear()
+                                st.session_state["pending_company"] = clean_co
+                                st.session_state.pop_reset_ver += 1
+                                st.toast(f"Company corrected to '{clean_co}'!", icon="✅")
+                                st.rerun()
 
         # --- CATEGORY WITH QUICK-ADD POPOVER ---
         col_cat, col_btn_cat = st.columns([0.82, 0.18])
@@ -430,7 +575,7 @@ if is_admin:
             )
         with col_btn_cat:
             st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-            with st.popover("➕", help="Add New Category"):
+            with st.popover("➕", help="Add New Category", key=f"pop_cat_add_{st.session_state.pop_reset_ver}"):
                 st.markdown("**Add New Category**")
                 new_cat_name = st.text_input("Category Name", key=get_key("pop_new_cat"))
                 if st.button("Save Category", key=get_key("pop_btn_save_cat"), type="primary", use_container_width=True):
@@ -443,7 +588,8 @@ if is_admin:
                         else:
                             supabase.table("category_master").insert({"category_name": new_cat_name.strip()}).execute()
                             st.cache_data.clear()
-                            st.session_state[get_key("category")] = new_cat_name.strip()
+                            st.session_state["pending_category"] = new_cat_name.strip()
+                            st.session_state.pop_reset_ver += 1
                             st.toast(f"Category '{new_cat_name.strip()}' added & selected!", icon="✅")
                             st.rerun()
 
@@ -471,7 +617,7 @@ if is_admin:
             )
         with col_btn_sc:
             st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-            with st.popover("➕", help="Add New Sub Category"):
+            with st.popover("➕", help="Add New Sub Category", key=f"pop_sc_add_{st.session_state.pop_reset_ver}"):
                 st.markdown("**Add New Sub Category**")
                 new_sc_name = st.text_input("Sub Category Name", key=get_key("pop_new_sc"))
                 if st.button("Save Sub Category", key=get_key("pop_btn_save_sc"), type="primary", use_container_width=True):
@@ -482,7 +628,8 @@ if is_admin:
                     else:
                         supabase.table("sub_category_master").insert({"category_id": category_record["category_id"], "sub_category_name": new_sc_name.strip()}).execute()
                         st.cache_data.clear()
-                        st.session_state[get_key("sub_category")] = new_sc_name.strip()
+                        st.session_state["pending_sub_category"] = new_sc_name.strip()
+                        st.session_state.pop_reset_ver += 1
                         st.toast(f"Sub Category '{new_sc_name.strip()}' added & selected!", icon="✅")
                         st.rerun()
 
@@ -906,13 +1053,13 @@ with right_col:
                                 c_fullname = f"{cand.get('first_name', '')} {cand.get('last_name', '')}".strip()
                                 cand_ref = cand.get('candidate_reference_no', f"CAN-{cand.get('candidate_id')}")
                                 is_legacy_cand = cand.get("is_legacy", False)
-                                pool_badge = "<span style='background:#EEF2FF; color:#4F46E5; border:1px solid #C7D2FE; font-size:11px; padding:2px 8px; border-radius:10px; font-weight:bold; margin-right:6px;'>🏛️ Legacy Archive</span>" if is_legacy_cand else "<span style='background:#F0FDF4; color:#15803D; border:1px solid #BBF7D0; font-size:11px; padding:2px 8px; border-radius:10px; font-weight:bold; margin-right:6px;'>🟢 Live Pool</span>"
+                                pool_badge = "<span style='background:rgba(99, 102, 241, 0.15); color:#818CF8; border:1px solid rgba(99, 102, 241, 0.35); font-size:11px; padding:2px 8px; border-radius:10px; font-weight:bold; margin-right:6px;'>🏛️ Legacy Archive</span>" if is_legacy_cand else "<span style='background:rgba(34, 197, 94, 0.15); color:#4ADE80; border:1px solid rgba(34, 197, 94, 0.35); font-size:11px; padding:2px 8px; border-radius:10px; font-weight:bold; margin-right:6px;'>🟢 Live Pool</span>"
                                 
                                 with st.container(border=True):
                                     t1_h1, t1_h2 = st.columns([0.7, 0.3])
                                     with t1_h1:
                                         st.markdown(
-                                            f"{pool_badge} <span style='font-weight:700; font-size:15px; color:#0F172A;'>{cand_ref} | {c_fullname}</span> &nbsp; <span style='color:#64748B; font-size:13px;'>{cand.get('current_designation', 'Candidate')} at {cand.get('current_company', 'N/A')}</span>",
+                                            f"{pool_badge} <span style='font-weight:700; font-size:15px;'>{cand_ref} | {c_fullname}</span> &nbsp; <span style='opacity:0.8; font-size:13px;'>{cand.get('current_designation', 'Candidate')} at {cand.get('current_company', 'N/A')}</span>",
                                             unsafe_allow_html=True
                                         )
                                     with t1_h2:
@@ -1135,15 +1282,15 @@ with right_col:
                     if is_cand_deact:
                         status_badge = f"<span style='background:#475569; color:white; border:1px solid #334155; font-size:11px; padding:2px 8px; border-radius:10px; font-weight:bold; margin-right:6px;'>🚫 {cand_raw_status}</span>"
                     elif is_legacy_cand:
-                        status_badge = "<span style='background:#EEF2FF; color:#4F46E5; border:1px solid #C7D2FE; font-size:11px; padding:2px 8px; border-radius:10px; font-weight:bold; margin-right:6px;'>🏛️ Legacy Archive</span>"
+                        status_badge = "<span style='background:rgba(99, 102, 241, 0.15); color:#818CF8; border:1px solid rgba(99, 102, 241, 0.35); font-size:11px; padding:2px 8px; border-radius:10px; font-weight:bold; margin-right:6px;'>🏛️ Legacy Archive</span>"
                     else:
-                        status_badge = "<span style='background:#F0FDF4; color:#15803D; border:1px solid #BBF7D0; font-size:11px; padding:2px 8px; border-radius:10px; font-weight:bold; margin-right:6px;'>🟢 Live Pool</span>"
+                        status_badge = "<span style='background:rgba(34, 197, 94, 0.15); color:#4ADE80; border:1px solid rgba(34, 197, 94, 0.35); font-size:11px; padding:2px 8px; border-radius:10px; font-weight:bold; margin-right:6px;'>🟢 Live Pool</span>"
                     
                     with st.container(border=True):
                         head_col1, head_col2 = st.columns([0.7, 0.3])
                         with head_col1:
                             st.markdown(
-                                f"{status_badge} <span style='font-size:16px; font-weight:700; color:#0F172A;'>#{idx} {c_ref} — {full_name}</span> &nbsp; <span style='color:#64748B; font-size:13px;'>{c.get('current_designation', 'Candidate')} @ {c.get('current_company', 'N/A')}</span>",
+                                f"{status_badge} <span style='font-size:16px; font-weight:700;'>#{idx} {c_ref} — {full_name}</span> &nbsp; <span style='opacity:0.8; font-size:13px;'>{c.get('current_designation', 'Candidate')} @ {c.get('current_company', 'N/A')}</span>",
                                 unsafe_allow_html=True
                             )
                         with head_col2:
@@ -1161,24 +1308,26 @@ with right_col:
                         matched_str = ', '.join(m['matched_skills'][:4]) if m['matched_skills'] else 'None'
                         missing_str = ', '.join(m['missing_skills'][:3]) if m['missing_skills'] else 'None'
 
+                        box_style = "background:rgba(128, 128, 128, 0.08); border:1px solid rgba(128, 128, 128, 0.2); padding:8px 10px; border-radius:6px; font-size:12px; min-height:85px;"
+
                         with met_c1:
                             st.markdown(
-                                f"<div style='background:#F8FAFC; border:1px solid #E2E8F0; padding:8px 10px; border-radius:6px; font-size:12px; min-height:85px;'><b>🛠️ Skills ({m['skill_score']}/40 pts)</b><br/><span style='color:#16A34A;'>✓ {matched_str}</span><br/><span style='color:#DC2626;'>✗ {missing_str}</span></div>",
+                                f"<div style='{box_style}'><b>🛠️ Skills ({m['skill_score']}/40 pts)</b><br/><span style='color:#16A34A;'>✓ {matched_str}</span><br/><span style='color:#EF4444;'>✗ {missing_str}</span></div>",
                                 unsafe_allow_html=True
                             )
                         with met_c2:
                             st.markdown(
-                                f"<div style='background:#F8FAFC; border:1px solid #E2E8F0; padding:8px 10px; border-radius:6px; font-size:12px; min-height:85px;'><b>⏳ Experience ({m['exp_score']}/25 pts)</b><br/>{m['exp_msg']}</div>",
+                                f"<div style='{box_style}'><b>⏳ Experience ({m['exp_score']}/25 pts)</b><br/>{m['exp_msg']}</div>",
                                 unsafe_allow_html=True
                             )
                         with met_c3:
                             st.markdown(
-                                f"<div style='background:#F8FAFC; border:1px solid #E2E8F0; padding:8px 10px; border-radius:6px; font-size:12px; min-height:85px;'><b>💰 Budget/CTC ({m['budget_score']}/20 pts)</b><br/>{m['budget_msg']}</div>",
+                                f"<div style='{box_style}'><b>💰 Budget/CTC ({m['budget_score']}/20 pts)</b><br/>{m['budget_msg']}</div>",
                                 unsafe_allow_html=True
                             )
                         with met_c4:
                             st.markdown(
-                                f"<div style='background:#F8FAFC; border:1px solid #E2E8F0; padding:8px 10px; border-radius:6px; font-size:12px; min-height:85px;'><b>📍 Location ({m['loc_score']}/15 pts)</b><br/>{m['loc_msg']}</div>",
+                                f"<div style='{box_style}'><b>📍 Location ({m['loc_score']}/15 pts)</b><br/>{m['loc_msg']}</div>",
                                 unsafe_allow_html=True
                             )
 
@@ -1214,7 +1363,7 @@ with right_col:
                                 if st.button("🚫 Deactivate", key=f"job_btn_deact_{c['candidate_id']}", use_container_width=True, help="Deactivate or Archive Profile"):
                                     deactivate_candidate_dialog(c["candidate_id"], full_name, is_legacy=is_legacy_cand, legacy_id=c.get("legacy_candidate_id"), raw_cand_data=c)
                             
-                        btn_col4.markdown(f"<div style='font-size:12px; color:#475569; padding-top:6px;'>📞 <b>{c.get('mobile_no', '-')}</b><br/>✉️ {c.get('email', '-')}</div>", unsafe_allow_html=True)
+                        btn_col4.markdown(f"<div style='font-size:12px; opacity:0.85; padding-top:6px;'>📞 <b>{c.get('mobile_no', '-')}</b><br/>✉️ {c.get('email', '-')}</div>", unsafe_allow_html=True)
                         st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
             else:
                 st.info(f"No candidates found matching with >= {min_threshold}% threshold. Try extending the Experience range or Budget stretch in the controls above.")
