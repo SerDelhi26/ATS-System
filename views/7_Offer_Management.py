@@ -1,6 +1,6 @@
 import streamlit as st
 from db import supabase
-from common import show_logout, show_job_notifications, show_user_profile
+from common import show_logout, show_job_notifications, show_user_profile, render_pagination
 from datetime import date, datetime
 from theme import apply_theme
 
@@ -298,7 +298,10 @@ if st.session_state.edit_offer_id:
 
     if offer:
         # SECURITY CHECK: Only Admin or the Creator can edit
-        if st.session_state.user_role == "Admin" or offer["created_by_user_id"] == st.session_state.user_id:
+        if (
+            st.session_state.user_role == "Admin"
+            or offer.get("created_by_user_id") == st.session_state.user_id
+        ):
             editing = True
         else:
             st.error("You are not authorized to edit this offer.")
@@ -343,6 +346,10 @@ left_col, right_col = st.columns(
 
 with left_col:
 
+    if st.session_state.get("offer_success_message"):
+        st.success(st.session_state.offer_success_message)
+        del st.session_state.offer_success_message
+
     def get_key(base_name):
         if editing:
             return f"{base_name}_{offer['offer_id']}"
@@ -360,7 +367,10 @@ with left_col:
     
     # Add security filtering for the dropdown
     if st.session_state.user_role != "Admin":
-        raw_candidates = [c for c in raw_candidates if c.get("created_by_user_id") == st.session_state.user_id]
+        raw_candidates = [
+            c for c in raw_candidates 
+            if c.get("created_by_user_id") == st.session_state.user_id
+        ]
     
     # ENHANCEMENT: Only show "Selected" candidates when scheduling new offers. 
     # Once they get an offer, they hide automatically!
@@ -596,7 +606,7 @@ with left_col:
             # 3. Make sure the job reverts back to open if they were "Joined" before deletion
             sync_job_status(selected_job_id)
             
-            st.success("Offer deleted successfully. Candidate reverted to 'Selected' stage.")
+            st.session_state.offer_success_message = "Offer deleted successfully. Candidate reverted to 'Selected' stage."
             st.session_state.edit_offer_id = None
             st.session_state.form_reset_offer += 1
             st.rerun()
@@ -670,13 +680,7 @@ with left_col:
                 offer_status,
 
                 "remarks":
-                remarks.strip(),
-
-                "created_by_user_id":
-                st.session_state.user_id,
-
-                "created_by_name":
-                st.session_state.user_name
+                remarks.strip()
 
             }
 
@@ -704,13 +708,13 @@ with left_col:
                         offer_status
                     )
 
-                    st.success(
-                        "Offer Updated Successfully."
-                    )
-
+                    st.session_state.offer_success_message = "Offer Updated Successfully."
                     st.session_state.edit_offer_id = None
 
                 else:
+
+                    offer_data["created_by_user_id"] = st.session_state.user_id
+                    offer_data["created_by_name"] = st.session_state.user_name
 
                     (
                         supabase
@@ -728,9 +732,7 @@ with left_col:
                         offer_status
                     )
 
-                    st.success(
-                        "Offer Saved Successfully."
-                    )
+                    st.session_state.offer_success_message = "Offer Saved Successfully."
                 
                 # ==========================================
                 # TWO-WAY SMART AUTO-SYNC JOB LOGIC
@@ -770,7 +772,7 @@ with right_col:
             "offer_id",
             desc=True
         )
-        .limit(500)
+        .limit(2000)
         .execute()
     )
 
@@ -780,10 +782,9 @@ with right_col:
     # FILTERS
     # --------------------------
 
-    filter_col1, filter_col2 = st.columns(2)
+    filter_col1, filter_col2, filter_col3 = st.columns(3)
 
     with filter_col1:
-
         status_filter = st.selectbox(
             "Offer Status",
             [
@@ -797,11 +798,24 @@ with right_col:
         )
 
     with filter_col2:
+        all_jobs_in_offers = sorted(
+            list(
+                {
+                    job_display_lookup.get(item["job_id"], "Unknown Job")
+                    for item in offers
+                    if item.get("job_id")
+                }
+            )
+        )
+        job_filter = st.selectbox(
+            "Job Filter",
+            ["All Jobs"] + all_jobs_in_offers
+        )
 
+    with filter_col3:
         search_text = st.text_input(
             "🔍 Search Offer",
-            placeholder=
-            "Candidate, CAN No or Job No"
+            placeholder="Candidate, CAN No or Job No"
         )
 
 
@@ -812,15 +826,9 @@ with right_col:
     all_candidates = get_candidate_lookup()
 
     candidate_lookup = {
-
         candidate["candidate_id"]:
-
-        f"{candidate['candidate_reference_no']} | "
-        f"{candidate['first_name']} "
-        f"{candidate['last_name']}"
-
+        f"{candidate['candidate_reference_no']} | {candidate['first_name']} {candidate['last_name']}"
         for candidate in all_candidates
-
     }
 
     # --------------------------
@@ -828,16 +836,21 @@ with right_col:
     # --------------------------
 
     if status_filter != "All Status":
-
         offers = [
-
             item
-
             for item in offers
+            if item["offer_status"] == status_filter
+        ]
 
-            if item["offer_status"]
-            == status_filter
+    # --------------------------
+    # JOB FILTER
+    # --------------------------
 
+    if job_filter != "All Jobs":
+        offers = [
+            item
+            for item in offers
+            if job_display_lookup.get(item["job_id"], "") == job_filter
         ]
 
     # --------------------------
@@ -894,11 +907,7 @@ with right_col:
 
     if offers:
         
-        # Limit UI rendering to 25 items to stop Streamlit from freezing
-        display_offers = offers[:25]
-        if len(offers) > 25:
-            st.caption(f"⚠️ Showing top 25 of {len(offers)} results to maintain performance. Use the search bar to find specific records.")
-
+        display_offers, current_page, total_pages = render_pagination(offers, page_size_default=25, key_prefix="offers")
 
         header = st.columns(
             [3, 3, 2, 2, 3, 1]

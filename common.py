@@ -109,3 +109,71 @@ def show_job_notifications():
 
     except Exception as e:
         pass
+
+
+def render_pagination(items, page_size_default=25, key_prefix="page", page_size_options=[25, 50, 100]):
+    """
+    Renders clean Previous/Next pagination controls for lists or DataFrames.
+    Returns (page_items, current_page, total_pages).
+    """
+    total_items = len(items) if items is not None else 0
+    if total_items == 0:
+        return items, 1, 1
+
+    page_key = f"{key_prefix}_current_page"
+
+    if page_key not in st.session_state:
+        st.session_state[page_key] = 1
+
+    # Selector for page size and status indicator
+    col_info, col_size, col_prev, col_page, col_next = st.columns([3.5, 1.8, 1.2, 1.8, 1.2])
+
+    page_size = col_size.selectbox(
+        "Rows per page",
+        options=page_size_options,
+        index=page_size_options.index(page_size_default) if page_size_default in page_size_options else 0,
+        key=f"{key_prefix}_size_select",
+        label_visibility="collapsed"
+    )
+
+    total_pages = max(1, (total_items + page_size - 1) // page_size)
+
+    # Ensure page is within valid range
+    if st.session_state[page_key] > total_pages:
+        st.session_state[page_key] = total_pages
+    if st.session_state[page_key] < 1:
+        st.session_state[page_key] = 1
+
+    current_page = st.session_state[page_key]
+    start_idx = (current_page - 1) * page_size
+    end_idx = min(start_idx + page_size, total_items)
+
+    col_info.markdown(
+        f"<div style='padding-top: 6px; color: #475569; font-size: 13px;'>"
+        f"Showing <b>{start_idx + 1}–{end_idx}</b> of <b>{total_items}</b> records"
+        f"</div>",
+        unsafe_allow_html=True
+    )
+
+    if col_prev.button("◀ Prev", key=f"{key_prefix}_prev_btn", disabled=(current_page <= 1), use_container_width=True):
+        st.session_state[page_key] -= 1
+        st.rerun()
+
+    col_page.markdown(
+        f"<div style='text-align: center; padding-top: 6px; font-weight: 600; font-size: 13px; color: #1E293B;'>"
+        f"Page {current_page} of {total_pages}"
+        f"</div>",
+        unsafe_allow_html=True
+    )
+
+    if col_next.button("Next ▶", key=f"{key_prefix}_next_btn", disabled=(current_page >= total_pages), use_container_width=True):
+        st.session_state[page_key] += 1
+        st.rerun()
+
+    # Slice items (works for list or pandas DataFrame)
+    if hasattr(items, "iloc"):
+        page_items = items.iloc[start_idx:end_idx]
+    else:
+        page_items = items[start_idx:end_idx]
+
+    return page_items, current_page, total_pages

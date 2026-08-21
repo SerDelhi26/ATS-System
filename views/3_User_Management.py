@@ -3,7 +3,7 @@ import pandas as pd
 import re
 from db import supabase
 from datetime import date
-from common import show_logout, show_job_notifications, show_user_profile
+from common import show_logout, show_job_notifications, show_user_profile, render_pagination
 import bcrypt
 from theme import apply_theme
 
@@ -186,6 +186,10 @@ unsafe_allow_html=True)
 # ==============================
 
 with left_col:
+
+    if st.session_state.get("user_success_msg"):
+        st.success(st.session_state.user_success_msg)
+        del st.session_state.user_success_msg
 
     st.subheader(
         "Edit Employee"
@@ -449,10 +453,7 @@ with left_col:
                             .execute()
                         )
 
-                        st.success(
-                            "User updated successfully."
-                        )
-
+                        st.session_state.user_success_msg = "User updated successfully."
                         st.session_state.edit_user_id = None
 
                     else:
@@ -464,9 +465,7 @@ with left_col:
                             .execute()
                         )
 
-                        st.success(
-                            "User added successfully."
-                        )
+                        st.session_state.user_success_msg = "User added successfully."
 
                     st.rerun()
 
@@ -537,14 +536,9 @@ with right_col:
         if not df.empty:
 
             if search_text:
-
                 df = df[
-                    df["full_name"]
-                    .str.contains(
-                        search_text,
-                        case=False,
-                        na=False
-                    )
+                    df["full_name"].str.contains(search_text, case=False, na=False) |
+                    df["email"].str.contains(search_text, case=False, na=False)
                 ]
 
             if role_filter != "All":
@@ -561,6 +555,8 @@ with right_col:
                     == status_filter
                 ]
 
+            display_df, current_page, total_pages = render_pagination(df, page_size_default=25, key_prefix="users")
+
             header = st.columns(
                 [0.5,2,3,1.5,1.5,1,1,1]
             )
@@ -576,7 +572,7 @@ with right_col:
 
             st.divider()
 
-            for _, row in df.iterrows():
+            for _, row in display_df.iterrows():
 
                 cols = st.columns(
                     [0.5,2,3,1.5,1.5,1,1,1]

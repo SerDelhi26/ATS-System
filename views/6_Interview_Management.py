@@ -1,6 +1,6 @@
 import streamlit as st
 from db import supabase
-from common import show_logout, show_job_notifications, show_user_profile
+from common import show_logout, show_job_notifications, show_user_profile, render_pagination
 from datetime import date, datetime
 from theme import apply_theme
 
@@ -260,7 +260,10 @@ if st.session_state.edit_interview_id:
 
     if interview:
         # SECURITY CHECK: Only Admin or the Creator can edit
-        if st.session_state.user_role == "Admin" or interview["created_by_user_id"] == st.session_state.user_id:
+        if (
+            st.session_state.user_role == "Admin"
+            or interview.get("created_by_user_id") == st.session_state.user_id
+        ):
             editing = True
         else:
             st.error("You are not authorized to edit this interview.")
@@ -311,6 +314,10 @@ left_col, right_col = st.columns(
 # ==========================
 
 with left_col:
+
+    if st.session_state.get("interview_success_message"):
+        st.success(st.session_state.interview_success_message)
+        del st.session_state.interview_success_message
 
     def get_key(base_name):
         if editing:
@@ -467,43 +474,11 @@ with left_col:
         key=get_key("interview_date")
     )
 
-    time_options = [
-
-        "-- Select Time --",
-        
-        "08:00",
-        "08:30",
-
-        "09:00",
-        "09:30",
-
-        "10:00",
-        "10:30",
-
-        "11:00",
-        "11:30",
-
-        "12:00",
-        "12:30",
-
-        "13:00",
-        "13:30",
-
-        "14:00",
-        "14:30",
-
-        "15:00",
-        "15:30",
-
-        "16:00",
-        "16:30",
-
-        "17:00",
-        "17:30",
-
-        "18:00"
-
-    ]
+    time_options = ["-- Select Time --"]
+    for hour in range(8, 23):  # 08:00 to 22:00
+        time_options.append(f"{hour:02d}:00")
+        if hour < 22:
+            time_options.append(f"{hour:02d}:30")
 
     interview_time = st.selectbox(
         "Interview Time *",
@@ -770,13 +745,7 @@ with left_col:
                 feedback.strip(),
 
                 "remarks":
-                remarks.strip(),
-
-                "created_by_user_id":
-                st.session_state.user_id,
-
-                "created_by_name":
-                st.session_state.user_name
+                remarks.strip()
 
             }
 
@@ -805,13 +774,13 @@ with left_col:
                         selected_candidate_id
                     )
 
-                    st.success(
-                        "Interview Updated Successfully."
-                    )
-
+                    st.session_state.interview_success_message = "Interview Updated Successfully."
                     st.session_state.edit_interview_id = None
 
                 else:
+
+                    interview_data["created_by_user_id"] = st.session_state.user_id
+                    interview_data["created_by_name"] = st.session_state.user_name
 
                     (
                         supabase
@@ -828,9 +797,7 @@ with left_col:
                         selected_candidate_id
                     )
 
-                    st.success(
-                        "Interview Scheduled Successfully."
-                    )
+                    st.session_state.interview_success_message = "Interview Scheduled Successfully."
                 
                 # Advance Reset Tracker to clean the form
                 st.session_state.form_reset_interview += 1
@@ -866,7 +833,7 @@ with right_col:
             "interview_id",
             desc=True
         )
-        .limit(500)
+        .limit(2000)
         .execute()
     )
 
@@ -1066,10 +1033,7 @@ with right_col:
 
     if interviews:
 
-        # Performance Fix 3: Limit UI rendering to 25 items to stop Streamlit from freezing
-        display_interviews = interviews[:25]
-        if len(interviews) > 25:
-            st.caption(f"⚠️ Showing top 25 of {len(interviews)} results to maintain performance. Use the search bar to find specific records.")
+        display_interviews, current_page, total_pages = render_pagination(interviews, page_size_default=25, key_prefix="interviews")
 
         header = st.columns(
             [3, 3, 2, 2, 2, 3, 1]

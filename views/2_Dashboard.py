@@ -84,6 +84,7 @@ jobs, candidates, interviews, offers, recruiters, job_titles, companies, job_ass
 # Lookups
 job_title_lookup = {item["job_title_id"]: item["job_title_name"] for item in job_titles}
 company_lookup = {item["company_id"]: item["company_name"] for item in companies}
+recruiter_user_map = {r["full_name"]: r["user_id"] for r in recruiters}
 offer_map = {o["candidate_id"]: o for o in offers if o.get("candidate_id")}
 
 job_lookup = {}
@@ -129,19 +130,42 @@ with f_col5:
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
 # ==========================
-# FILTER CANDIDATES & RELATED DATA
+# FILTER DATA ACROSS JOBS, CANDIDATES, INTERVIEWS & OFFERS
 # ==========================
+# 1. Filter Jobs
+filtered_jobs = []
+for j in jobs:
+    job_created_date = parse_date(j.get("created_date"))
+    if use_date_filter and job_created_date:
+        if job_created_date < from_date or job_created_date > to_date:
+            continue
+    if job_filter != "All Jobs":
+        selected_job_id = next((jid for jid, lbl in job_lookup.items() if lbl == job_filter), None)
+        if j["job_id"] != selected_job_id:
+            continue
+    if recruiter_filter != "All Recruiters":
+        rec_user_id = recruiter_user_map.get(recruiter_filter)
+        assigned_job_ids = {ja["job_id"] for ja in job_assignments if ja.get("user_id") == rec_user_id}
+        if j["job_id"] not in assigned_job_ids and j.get("created_by") != rec_user_id:
+            continue
+    filtered_jobs.append(j)
+
+# 2. Filter Candidates
 filtered_candidates = []
 for c in candidates:
     parsed_date = parse_date(c.get("created_on", ""))
     if use_date_filter:
         if not parsed_date or parsed_date < from_date or parsed_date > to_date:
             continue
-    if recruiter_filter != "All Recruiters" and c.get("created_by_name") != recruiter_filter:
-        continue
-    job_label = job_lookup.get(c.get("job_id"), "Unknown Job")
-    if job_filter != "All Jobs" and job_label != job_filter:
-        continue
+    if job_filter != "All Jobs":
+        job_label = job_lookup.get(c.get("job_id"), "Unknown Job")
+        if job_label != job_filter:
+            continue
+    if recruiter_filter != "All Recruiters":
+        rec_user_id = recruiter_user_map.get(recruiter_filter)
+        assigned_job_ids = {ja["job_id"] for ja in job_assignments if ja.get("user_id") == rec_user_id}
+        if c.get("created_by_name") != recruiter_filter and c.get("job_id") not in assigned_job_ids:
+            continue
     filtered_candidates.append(c)
 
 filtered_candidate_ids = {c["candidate_id"] for c in filtered_candidates}
@@ -151,11 +175,11 @@ filtered_offers = [o for o in offers if o.get("candidate_id") in filtered_candid
 # ==========================
 # TOP LEVEL METRICS (5 CARDS)
 # ==========================
-open_jobs = len([j for j in jobs if j.get("job_status") == "Open"])
+open_jobs = len([j for j in filtered_jobs if j.get("job_status") == "Open"])
 total_candidates = len(filtered_candidates)
-active_interviews = len([i for i in filtered_interviews if i.get("interview_status") in ["Scheduled", "Rescheduled"]])
-offer_released_count = len([c for c in filtered_candidates if c.get("current_stage") == "Offer"])
-total_hired = len([c for c in filtered_candidates if c.get("current_stage") == "Joined"])
+active_interviews = len(filtered_interviews)
+offer_released_count = len([c for c in filtered_candidates if c.get("current_stage") in ["Offer", "Offer Released", "Offer Accepted", "Offer Rejected", "Joined", "Hired"] or c.get("candidate_status") in ["Offer", "Offer Released", "Offer Accepted", "Offer Rejected", "Joined", "Hired"]])
+total_hired = len([c for c in filtered_candidates if c.get("current_stage") in ["Joined", "Hired"] or c.get("candidate_status") in ["Joined", "Hired"]])
 
 col1, col2, col3, col4, col5 = st.columns(5)
 with col1:
@@ -198,7 +222,7 @@ with chart_col1:
 with chart_col2:
     st.markdown("### 💼 Job Status Breakdown")
     status_counts = {}
-    for j in jobs:
+    for j in filtered_jobs:
         status = j.get("job_status", "Unknown")
         status_counts[status] = status_counts.get(status, 0) + 1
         
