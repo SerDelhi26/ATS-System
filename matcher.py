@@ -235,7 +235,18 @@ def calculate_candidate_match(
     cand_base_months = float(candidate.get("experience_months", 0) or 0)
     base_total_exp = round(cand_base_years + (cand_base_months / 12.0), 1)
     dynamic_exp = round(base_total_exp + elapsed_years, 1)
-    is_high_seniority = dynamic_exp >= 38.0
+
+    # Dynamic Age Calculation
+    base_age = candidate.get("approx_age")
+    if base_age:
+        try:
+            dynamic_age = int(round(float(base_age) + elapsed_years))
+        except Exception:
+            dynamic_age = int(round(22 + dynamic_exp))
+    else:
+        dynamic_age = int(round(22 + dynamic_exp))
+
+    is_high_seniority = (dynamic_exp >= 38.0) or (dynamic_age >= 58)
 
     if exp_min_override is not None:
         job_min_exp = float(exp_min_override)
@@ -307,6 +318,7 @@ def calculate_candidate_match(
         "base_exp": base_total_exp,
         "elapsed_years": elapsed_years,
         "dynamic_exp": dynamic_exp,
+        "approx_age": dynamic_age,
         "is_high_seniority": is_high_seniority,
         "exp_msg": exp_msg,
         "budget_msg": budget_msg,
@@ -360,8 +372,8 @@ def get_top_matched_candidates(
     if "young" in pref or "growth" in pref or "fast-track" in pref:
         scored.sort(
             key=lambda x: (
-                round(x["match"]["total_match_pct"] - (1.0 * min(20.0, x["match"]["dynamic_exp"])), 1),
-                -x["match"]["dynamic_exp"],
+                round(x["match"]["total_match_pct"] - (0.8 * min(25.0, max(0.0, x["match"]["approx_age"] - 22))), 1),
+                -x["match"]["approx_age"],
                 x["match"]["skill_score"]
             ),
             reverse=True
@@ -369,8 +381,8 @@ def get_top_matched_candidates(
     elif "senior" in pref or "veteran" in pref or "leadership" in pref:
         scored.sort(
             key=lambda x: (
-                round(x["match"]["total_match_pct"] + (1.0 * min(20.0, x["match"]["dynamic_exp"])), 1),
-                x["match"]["dynamic_exp"],
+                round(x["match"]["total_match_pct"] + (0.6 * min(25.0, max(0.0, x["match"]["approx_age"] - 25))), 1),
+                x["match"]["approx_age"],
                 x["match"]["skill_score"]
             ),
             reverse=True

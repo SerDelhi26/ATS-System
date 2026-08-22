@@ -118,7 +118,7 @@ def get_all_jobs_summary():
     return (
         supabase
         .table("job_management")
-        .select("job_id, job_reference_no, job_title_id, company_id, category_id, sub_category_id")
+        .select("job_id, job_reference_no, job_title_id, company_id, category_id, sub_category_id, job_status")
         .execute()
         .data or []
     )
@@ -172,6 +172,10 @@ if "edit_candidate_id" not in st.session_state:
 
     st.session_state.edit_candidate_id = None
 
+if "admin_unlocked_candidate_id" not in st.session_state:
+
+    st.session_state.admin_unlocked_candidate_id = None
+
 if "resume_url" not in st.session_state:
 
     st.session_state.resume_url = None
@@ -195,6 +199,29 @@ if "pending_duplicate_type" not in st.session_state:
 if "trigger_save" not in st.session_state:
 
     st.session_state.trigger_save = False
+
+def get_candidate_lock_info(cand, job_status_lookup_map):
+    """
+    Evaluates whether a candidate profile is locked from editing.
+    Returns: (is_locked: bool, lock_reason: str or None)
+    """
+    if not cand:
+        return False, None
+
+    stage = str(cand.get("current_stage") or "").strip()
+    cand_status = str(cand.get("candidate_status") or "").strip()
+
+    # Rule 1: Stage Lock - Candidate has Joined / Hired
+    if stage == "Joined" or cand_status in ["Joined", "Hired"]:
+        return True, "Candidate has Joined"
+
+    # Rule 2: Job Closure Lock - Associated Job is Closed or Cancelled
+    j_id = cand.get("job_id")
+    j_status = job_status_lookup_map.get(j_id, "Open") if j_id else "Open"
+    if j_status in ["Closed", "Cancelled"]:
+        return True, f"Job is {j_status}"
+
+    return False, None
 
 editing = False
 candidate = None
@@ -220,25 +247,40 @@ if st.session_state.edit_candidate_id:
 
         candidate = response.data[0]
 
-        if (
+        all_jobs_init = get_all_jobs_summary()
+        job_status_map_init = {j["job_id"]: j.get("job_status", "Open") for j in all_jobs_init}
+        is_cand_locked, lock_reason = get_candidate_lock_info(candidate, job_status_map_init)
+
+        is_authorized = (
             st.session_state.user_role == "Admin"
             or
             candidate.get("created_by_user_id")
             ==
             st.session_state.user_id
-        ):
+        )
 
-            editing = True
-
-        else:
+        if not is_authorized:
 
             st.error(
                 "You are not authorized to edit this candidate."
             )
 
             st.session_state.edit_candidate_id = None
+            st.session_state.admin_unlocked_candidate_id = None
 
             st.stop()
+
+        if is_cand_locked:
+            if st.session_state.user_role == "Admin" and st.session_state.get("admin_unlocked_candidate_id") == candidate["candidate_id"]:
+                editing = True
+                st.warning(f"⚠️ **Admin Override Active:** This profile is locked ({lock_reason}), but unlocked for this editing session under logged audit reason.")
+            else:
+                st.error(f"🔒 Cannot edit candidate: {lock_reason}. Profile modifications are restricted.")
+                st.session_state.edit_candidate_id = None
+                st.session_state.admin_unlocked_candidate_id = None
+                st.stop()
+        else:
+            editing = True
 
 def map_legacy_candidate_to_job(candidate_entry, job_id):
     """
@@ -250,6 +292,8 @@ def map_legacy_candidate_to_job(candidate_entry, job_id):
             "job_id": job_id,
             "first_name": candidate_entry.get("first_name", "Candidate"),
             "last_name": candidate_entry.get("last_name", "") or "",
+            "gender": candidate_entry.get("gender", "Not Specified"),
+            "approx_age": candidate_entry.get("approx_age"),
             "email": candidate_entry.get("email"),
             "mobile_no": candidate_entry.get("mobile_no"),
             "current_location": candidate_entry.get("current_location"),
@@ -349,6 +393,48 @@ def reactivate_candidate_dialog(cand_id, full_name, is_legacy=False, legacy_id=N
         if st.button("Cancel", use_container_width=True, key=f"btn_cand_dlg_cancel_r_{cand_id}"):
             st.rerun()
 
+@st.dialog("🔓 Admin Unlock & Edit Candidate Profile")
+def admin_unlock_candidate_dialog(cand_id, full_name, lock_reason, raw_cand_data=None):
+    st.markdown(f"**Candidate:** `{full_name}`")
+    st.markdown(f"**Current Status:** :red[**{lock_reason}**]")
+    st.caption("This candidate profile is currently locked from standard modifications. As an Administrator, you can unlock this profile for emergency data corrections by providing a mandatory reason below.")
+
+    unlock_reason = st.text_area(
+        "Unlock Reason / Remark *",
+        placeholder="e.g., Correcting candidate's alternate mobile number as requested by HR / Client...",
+        key=f"cand_dlg_unlock_reason_{cand_id}"
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🔓 Confirm Unlock & Edit", type="primary", use_container_width=True, key=f"btn_cand_dlg_unlock_confirm_{cand_id}"):
+            if not unlock_reason.strip():
+                st.error("Please provide an Unlock Reason.")
+                st.stop()
+
+            admin_name = st.session_state.get("user_name") or st.session_state.get("full_name") or "Administrator"
+            timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+            audit_str = f"\n[ADMIN UNLOCKED: {unlock_reason.strip()} on {timestamp_str} by {admin_name}]"
+            
+            existing_remarks = (raw_cand_data.get("remarks") if raw_cand_data else "") or ""
+            if not existing_remarks:
+                res = supabase.table("candidate_management").select("remarks").eq("candidate_id", cand_id).single().execute()
+                if res.data:
+                    existing_remarks = res.data.get("remarks") or ""
+
+            updated_remarks = (existing_remarks + audit_str).strip()
+            supabase.table("candidate_management").update({"remarks": updated_remarks}).eq("candidate_id", cand_id).execute()
+
+            st.session_state.edit_candidate_id = cand_id
+            st.session_state.admin_unlocked_candidate_id = cand_id
+            st.session_state.candidate_updated_success_msg = "Candidate unlocked for editing. Reason logged to audit remarks."
+            st.cache_data.clear()
+            st.rerun()
+
+    with col2:
+        if st.button("Cancel", use_container_width=True, key=f"btn_cand_dlg_unlock_cancel_{cand_id}"):
+            st.rerun()
+
 # ==========================
 # LAYOUT
 # ==========================
@@ -423,6 +509,11 @@ with left_col:
 
     job_display_lookup = {
         job["job_id"]: f"{job['job_reference_no']} | {job_title_lookup.get(job['job_title_id'], '')}"
+        for job in all_jobs
+    }
+
+    job_status_lookup = {
+        job["job_id"]: job.get("job_status", "Open")
         for job in all_jobs
     }
 
@@ -524,12 +615,24 @@ with left_col:
             value=get_val("last_name", ""),
             key=get_key("last_name")
         )
-        
-    email = st.text_input(
-        "Email *",
-        value=get_val("email", ""),
-        key=get_key("email")
-    )
+
+    col_g1, col_g2 = st.columns(2)
+    with col_g1:
+        gender_options = ["-- Select Gender --", "Male", "Female", "Other"]
+        raw_val_g = get_val("gender", "")
+        idx_g = gender_options.index(raw_val_g) if raw_val_g in gender_options else 0
+        gender = st.selectbox(
+            "Gender *",
+            gender_options,
+            index=idx_g,
+            key=get_key("gender")
+        )
+    with col_g2:
+        email = st.text_input(
+            "Email *",
+            value=get_val("email", ""),
+            key=get_key("email")
+        )
 
     col1, col2 = st.columns(2)
 
@@ -858,6 +961,7 @@ with left_col:
     if cancel_edit:
 
         st.session_state.edit_candidate_id = None
+        st.session_state.admin_unlocked_candidate_id = None
 
         st.session_state.pending_duplicate = None
         st.session_state.pending_duplicate_type = None
@@ -897,6 +1001,11 @@ with left_col:
         if selected_job == "-- Select Job --":
             validation_errors.append(
                 "Please select Job."
+            )
+
+        if gender == "-- Select Gender --" or not gender:
+            validation_errors.append(
+                "Please select Gender."
             )
 
         if not first_name.strip():
@@ -1160,6 +1269,15 @@ with left_col:
             # SAVE DATA
             # ==========================
 
+            calc_age = parsed.get("approx_age") if isinstance(parsed, dict) else None
+            if not calc_age and editing and candidate:
+                calc_age = candidate.get("approx_age")
+            if not calc_age:
+                try:
+                    calc_age = max(18, int(22 + (float(experience_years) if experience_years != "-- Select --" else 0)))
+                except Exception:
+                    calc_age = 25
+
             candidate_data = {
 
                 "job_id":
@@ -1170,6 +1288,12 @@ with left_col:
 
                 "last_name":
                     last_name.strip(),
+
+                "gender":
+                    gender,
+
+                "approx_age":
+                    int(calc_age),
 
                 "email":
                     email.strip().lower(),
@@ -1262,6 +1386,7 @@ with left_col:
 
                 st.success("Candidate Updated Successfully.")
                 st.session_state.edit_candidate_id = None
+                st.session_state.admin_unlocked_candidate_id = None
                 st.session_state.duplicate_override = False
                 st.session_state.pending_duplicate = None
                 st.session_state.pending_duplicate_type = None
@@ -1340,7 +1465,7 @@ with right_col:
         st.markdown("## 📋 Live Candidate Directory (Active Job Pipeline)")
         st.caption("Candidates submitted for active job openings. To browse or reactivate historical talent and deactivated records, open the **🏛️ Legacy & Deactivated Archive** tab.")
         
-        filter_col1, filter_col2, filter_col3 = st.columns(3)
+        filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
 
         with filter_col1:
             # Included granular statuses and deactivation states
@@ -1364,6 +1489,13 @@ with right_col:
                     "Inactive / Left Market",
                     "Blacklisted"
                 ]
+            )
+
+        with filter_col2:
+            gender_filter = st.selectbox(
+                "Gender",
+                ["All Genders", "Male", "Female", "Other", "Not Specified"],
+                key="cand_dir_gender_filter"
             )
 
         if st.session_state.get("resume_path_selected"):
@@ -1392,10 +1524,10 @@ with right_col:
             title_name = job_title_lookup.get(job["job_title_id"], "Unknown Job Title")
             job_filter_options.append(f"{job['job_reference_no']} | {title_name}")
 
-        with filter_col2:
+        with filter_col3:
             job_filter = st.selectbox("Job", job_filter_options, key="cand_dir_job_filter")
 
-        with filter_col3:
+        with filter_col4:
             recruiter_filter = "All Recruiters"
             if st.session_state.user_role == "Admin":
                 users = get_recruiters()
@@ -1413,6 +1545,7 @@ with right_col:
                 candidate_reference_no,
                 first_name,
                 last_name,
+                gender,
                 mobile_no,
                 email,
                 current_company,
@@ -1439,6 +1572,12 @@ with right_col:
             filtered_candidates = [
                 c for c in filtered_candidates
                 if c["candidate_status"] == status_filter or c["current_stage"] == status_filter
+            ]
+
+        if gender_filter != "All Genders":
+            filtered_candidates = [
+                c for c in filtered_candidates
+                if str(c.get("gender") or "Not Specified") == gender_filter
             ]
 
         if job_filter != "All Jobs":
@@ -1477,32 +1616,36 @@ with right_col:
                 candidates, page_size_default=25, key_prefix="candidates"
             )
 
-            headers = st.columns([1.8, 2.5, 2.5, 2, 1.8, 1.6, 2.2, 1.8, 1.2, 1, 1.2])
+            headers = st.columns([1.7, 2.3, 2.2, 1.2, 1.8, 1.6, 1.4, 2.0, 1.6, 1.0, 1.0, 1.0])
             headers[0].markdown("**CAN No**")
             headers[1].markdown("**Job No**")
             headers[2].markdown("**Candidate Name**")
-            headers[3].markdown("**Company**")
-            headers[4].markdown("**Mobile**")
-            headers[5].markdown("**Experience**")
-            headers[6].markdown("**Status**")
-            headers[7].markdown("**Entered By**")
-            headers[8].markdown("**Resume**")
-            headers[9].markdown("**Edit**")
-            headers[10].markdown("**Action**")
+            headers[3].markdown("**Gender**")
+            headers[4].markdown("**Company**")
+            headers[5].markdown("**Mobile**")
+            headers[6].markdown("**Exp**")
+            headers[7].markdown("**Status**")
+            headers[8].markdown("**Entered By**")
+            headers[9].markdown("**CV**")
+            headers[10].markdown("**Edit**")
+            headers[11].markdown("**Action**")
 
             st.divider()
 
             for candidate in display_candidates:
-                cols = st.columns([1.8, 2.5, 2.5, 2, 1.8, 1.6, 2.2, 1.8, 1.2, 1, 1.2])
+                cols = st.columns([1.7, 2.3, 2.2, 1.2, 1.8, 1.6, 1.4, 2.0, 1.6, 1.0, 1.0, 1.0])
                 full_name = f"{candidate.get('first_name','')} {candidate.get('last_name','')}".strip()
                 experience = f"{candidate.get('experience_years',0)}Y {candidate.get('experience_months',0)}M"
+                c_gender = candidate.get("gender") or "Not Specified"
+                g_icon = "👨" if c_gender == "Male" else ("👩" if c_gender == "Female" else "⚧")
 
                 cols[0].write(candidate.get("candidate_reference_no", ""))
                 cols[1].write(job_display_lookup.get(candidate["job_id"], ""))
                 cols[2].write(full_name)
-                cols[3].write(candidate.get("current_company", ""))
-                cols[4].write(candidate.get("mobile_no", ""))
-                cols[5].write(experience)
+                cols[3].write(f"{g_icon} {c_gender}")
+                cols[4].write(candidate.get("current_company", ""))
+                cols[5].write(candidate.get("mobile_no", ""))
+                cols[6].write(experience)
 
                 master_stage = candidate.get("current_stage")
                 manual_status = candidate.get("candidate_status", "")
@@ -1532,7 +1675,7 @@ with right_col:
                 }
                 color = status_colors.get(status, "#64748B")
 
-                cols[6].markdown(
+                cols[7].markdown(
                     f"""
                     <div style="background:{color}; color:white; padding:6px 12px; border-radius:12px; text-align:center; font-size:14px; white-space:nowrap; display:inline-block;">
                     {status}
@@ -1541,35 +1684,47 @@ with right_col:
                     unsafe_allow_html=True
                 )
 
-                cols[7].write(candidate.get("created_by_name", ""))
+                cols[8].write(candidate.get("created_by_name", ""))
 
                 if candidate.get("resume_path"):
-                    if cols[8].button("📄 CV", key=f"view_{candidate['candidate_id']}"):
+                    if cols[9].button("📄", key=f"view_{candidate['candidate_id']}", help="View CV"):
                         st.session_state.resume_path_selected = candidate["resume_path"]
                         st.rerun()
                 else:
-                    cols[8].write("-")
+                    cols[9].write("-")
 
-                can_edit = False
-                if st.session_state.user_role == "Admin":
-                    can_edit = True
-                elif candidate.get("created_by_user_id") == st.session_state.user_id:
-                    can_edit = True
+                is_cand_locked, cand_lock_reason = get_candidate_lock_info(candidate, job_status_lookup)
 
-                if can_edit:
-                    if cols[9].button("✏️", key=f"edit_{candidate['candidate_id']}"):
-                        st.session_state.edit_candidate_id = candidate["candidate_id"]
-                        st.rerun()
+                is_user_authorized = (
+                    st.session_state.user_role == "Admin"
+                    or candidate.get("created_by_user_id") == st.session_state.user_id
+                )
+
+                if is_cand_locked:
+                    if st.session_state.user_role == "Admin":
+                        if cols[10].button("🔓", key=f"unlock_{candidate['candidate_id']}", help=f"Locked: {cand_lock_reason}. Click to Admin Unlock with Remark."):
+                            admin_unlock_candidate_dialog(candidate["candidate_id"], full_name, cand_lock_reason, raw_cand_data=candidate)
+                    else:
+                        cols[10].markdown(f"<div title='Locked: {cand_lock_reason}. Modifications restricted.' style='font-size:16px; cursor:help;'>🔒</div>", unsafe_allow_html=True)
                 else:
-                    cols[9].write("🔒")
+                    if is_user_authorized:
+                        if cols[10].button("✏️", key=f"edit_{candidate['candidate_id']}"):
+                            st.session_state.edit_candidate_id = candidate["candidate_id"]
+                            st.session_state.admin_unlocked_candidate_id = None
+                            st.rerun()
+                    else:
+                        cols[10].markdown("<div title='Not authorized to edit this candidate.' style='font-size:16px;'>🔒</div>", unsafe_allow_html=True)
 
                 is_row_deact = (status in ["Retired", "Deceased", "Inactive / Left Market", "Blacklisted"]) or (manual_status in ["Retired", "Deceased", "Inactive / Left Market", "Blacklisted"]) or (master_stage in ["Retired", "Deceased", "Inactive / Left Market", "Blacklisted"])
                 if is_row_deact:
-                    if cols[10].button("🟢", key=f"tbl_btn_react_{candidate['candidate_id']}", help="Reactivate Candidate Profile"):
+                    if cols[11].button("🟢", key=f"tbl_btn_react_{candidate['candidate_id']}", help="Reactivate Candidate Profile"):
                         reactivate_candidate_dialog(candidate["candidate_id"], full_name, is_legacy=False, raw_cand_data=candidate)
                 else:
-                    if cols[10].button("🚫", key=f"tbl_btn_deact_{candidate['candidate_id']}", help="Deactivate or Archive Profile"):
-                        deactivate_candidate_dialog(candidate["candidate_id"], full_name, is_legacy=False, raw_cand_data=candidate)
+                    if is_cand_locked:
+                        cols[11].markdown(f"<div title='Deactivation restricted: {cand_lock_reason}' style='font-size:14px; opacity:0.6; text-align:center;'>-</div>", unsafe_allow_html=True)
+                    else:
+                        if cols[11].button("🚫", key=f"tbl_btn_deact_{candidate['candidate_id']}", help="Deactivate or Archive Profile"):
+                            deactivate_candidate_dialog(candidate["candidate_id"], full_name, is_legacy=False, raw_cand_data=candidate)
         else:
             st.info("No candidates found.")
 
@@ -1585,7 +1740,7 @@ with right_col:
             supabase
             .table("legacy_candidates")
             .select(
-                "legacy_candidate_id, candidate_reference_no, first_name, last_name, email, mobile_no, alternate_mobile, current_company, current_designation, experience_years, experience_months, current_ctc, expected_ctc, current_location, notice_period, notice_negotiable, skills, qualification, education_details, resume_name, resume_path, created_on, is_migrated_to_active, migrated_candidate_id"
+                "legacy_candidate_id, candidate_reference_no, first_name, last_name, gender, email, mobile_no, alternate_mobile, current_company, current_designation, experience_years, experience_months, current_ctc, expected_ctc, current_location, notice_period, notice_negotiable, skills, qualification, education_details, resume_name, resume_path, created_on, is_migrated_to_active, migrated_candidate_id"
             )
             .order("legacy_candidate_id", desc=False)
             .limit(3000)
@@ -1619,7 +1774,7 @@ with right_col:
         st.markdown("<div style='height:4px;'></div>", unsafe_allow_html=True)
 
         # Filters Row
-        leg_f1, leg_f2, leg_f3 = st.columns([0.35, 0.35, 0.30])
+        leg_f1, leg_f2, leg_f3, leg_f4 = st.columns([0.25, 0.25, 0.25, 0.25])
         with leg_f1:
             leg_status_filter = st.selectbox(
                 "Archive Status / Lifecycle",
@@ -1635,12 +1790,18 @@ with right_col:
                 key="leg_status_filter"
             )
         with leg_f2:
+            leg_gender_filter = st.selectbox(
+                "Gender",
+                ["All Genders", "Male", "Female", "Other", "Not Specified"],
+                key="leg_gender_filter"
+            )
+        with leg_f3:
             leg_search = st.text_input(
                 "🔍 Search Historical Talent",
                 placeholder="LEG Ref, Name, Mobile, Email, Company, Skill, Location...",
                 key="leg_search_query"
             )
-        with leg_f3:
+        with leg_f4:
             leg_location_filter = st.selectbox(
                 "Filter by Location",
                 ["All Locations"] + sorted(list({lc.get("current_location") for lc in leg_raw_data if lc.get("current_location")})),
@@ -1663,6 +1824,9 @@ with right_col:
         elif leg_status_filter == "🟢 Active Archive Talent Only":
             filtered_legacy = [lc for lc in filtered_legacy if not lc["is_deactivated"]]
 
+        if leg_gender_filter != "All Genders":
+            filtered_legacy = [lc for lc in filtered_legacy if str(lc.get("gender") or "Not Specified") == leg_gender_filter]
+
         if leg_location_filter != "All Locations":
             filtered_legacy = [lc for lc in filtered_legacy if lc.get("current_location") == leg_location_filter]
 
@@ -1684,17 +1848,18 @@ with right_col:
             )
 
             # Table Header
-            h_cols = st.columns([1.6, 2.0, 1.8, 1.6, 1.3, 1.3, 1.8, 0.9, 1.2, 1.5])
+            h_cols = st.columns([1.5, 1.8, 1.1, 1.6, 1.4, 1.2, 1.2, 1.6, 0.8, 1.0, 1.4])
             h_cols[0].markdown("**LEG No**")
             h_cols[1].markdown("**Candidate Name**")
-            h_cols[2].markdown("**Company**")
-            h_cols[3].markdown("**Mobile**")
-            h_cols[4].markdown("**Experience**")
-            h_cols[5].markdown("**Location**")
-            h_cols[6].markdown("**Status**")
-            h_cols[7].markdown("**CV**")
-            h_cols[8].markdown("**Action**")
-            h_cols[9].markdown("**Map to Job**")
+            h_cols[2].markdown("**Gender**")
+            h_cols[3].markdown("**Company**")
+            h_cols[4].markdown("**Mobile**")
+            h_cols[5].markdown("**Experience**")
+            h_cols[6].markdown("**Location**")
+            h_cols[7].markdown("**Status**")
+            h_cols[8].markdown("**CV**")
+            h_cols[9].markdown("**Action**")
+            h_cols[10].markdown("**Map to Job**")
 
             st.markdown("<hr style='margin:4px 0 10px 0;'>", unsafe_allow_html=True)
 
@@ -1707,18 +1872,21 @@ with right_col:
             }
 
             for lc in disp_legacy:
-                cols = st.columns([1.6, 2.0, 1.8, 1.6, 1.3, 1.3, 1.8, 0.9, 1.2, 1.5])
+                cols = st.columns([1.5, 1.8, 1.1, 1.6, 1.4, 1.2, 1.2, 1.6, 0.8, 1.0, 1.4])
                 full_name = f"{lc.get('first_name', '')} {lc.get('last_name', '')}".strip()
                 exp_str = f"{lc.get('experience_years', 0)}Y {lc.get('experience_months', 0)}M"
                 c_status = lc["status"]
                 c_color = status_colors.get(c_status, "#4F46E5")
+                leg_g = lc.get("gender") or "Not Specified"
+                g_icon = "👨" if leg_g == "Male" else ("👩" if leg_g == "Female" else "⚧")
 
                 cols[0].write(lc.get("candidate_reference_no", f"LEG-{lc['legacy_candidate_id']}"))
                 cols[1].write(full_name)
-                cols[2].write(lc.get("current_company", "-"))
-                cols[3].write(lc.get("mobile_no", "-"))
-                cols[4].write(exp_str)
-                cols[5].write(lc.get("current_location", "-"))
+                cols[2].write(f"{g_icon} {leg_g}")
+                cols[3].write(lc.get("current_company", "-"))
+                cols[4].write(lc.get("mobile_no", "-"))
+                cols[5].write(exp_str)
+                cols[6].write(lc.get("current_location", "-"))
 
                 cols[6].markdown(
                     f"""
@@ -1866,12 +2034,15 @@ with right_col:
                     c_ref = cand.get('candidate_reference_no', f"CAN-{cand.get('candidate_id')}")
                     is_legacy = cand.get("is_legacy", False)
                     pool_badge = "<span style='background:#EEF2FF; color:#4F46E5; border:1px solid #C7D2FE; font-size:11px; padding:2px 8px; border-radius:10px; font-weight:bold; margin-right:6px;'>🏛️ Legacy Archive</span>" if is_legacy else "<span style='background:#F0FDF4; color:#15803D; border:1px solid #BBF7D0; font-size:11px; padding:2px 8px; border-radius:10px; font-weight:bold; margin-right:6px;'>🟢 Live Pool</span>"
+                    cand_g = cand.get("gender") or "Not Specified"
+                    g_icon = "👨" if cand_g == "Male" else ("👩" if cand_g == "Female" else "⚧")
+                    gender_pill = f"<span style='background:#F1F5F9; color:#475569; border:1px solid #CBD5E1; font-size:11px; padding:2px 8px; border-radius:10px; font-weight:600; margin-right:6px;'>{g_icon} {cand_g}</span>"
 
                     with st.container(border=True):
                         h_col1, h_col2 = st.columns([0.75, 0.25])
                         with h_col1:
                             st.markdown(
-                                f"{pool_badge} <span style='font-size:16px; font-weight:700; color:#0F172A;'>#{idx} {c_ref} — {c_name}</span> &nbsp; <span style='color:#64748B; font-size:13px;'>{cand.get('current_designation', 'Candidate')} @ {cand.get('current_company', 'N/A')}</span>",
+                                f"{pool_badge} {gender_pill} <span style='font-size:16px; font-weight:700; color:#0F172A;'>#{idx} {c_ref} — {c_name}</span> &nbsp; <span style='color:#64748B; font-size:13px;'>{cand.get('current_designation', 'Candidate')} @ {cand.get('current_company', 'N/A')}</span>",
                                 unsafe_allow_html=True
                             )
                         with h_col2:
@@ -1889,7 +2060,9 @@ with right_col:
                                 unsafe_allow_html=True
                             )
 
-                        act_col1, act_col2, act_col3, act_col4 = st.columns([0.28, 0.28, 0.22, 0.22])
+                        is_cand_locked_sem, sem_lock_reason = (False, None) if is_legacy else get_candidate_lock_info(cand, job_status_lookup)
+
+                        act_col1, act_col2, act_col3, act_col4 = st.columns([0.30, 0.28, 0.20, 0.22])
                         with act_col1:
                             if is_legacy:
                                 if st.button(f"📥 Add to Job Form", key=f"sem_promote_{cand['candidate_id']}", use_container_width=True):
@@ -1897,31 +2070,54 @@ with right_col:
                                     st.session_state.candidate_form_reset += 1
                                     st.rerun()
                             else:
-                                if st.button(f"✏️ Edit Profile", key=f"sem_edit_{cand['candidate_id']}", use_container_width=True):
-                                    st.session_state.edit_candidate_id = cand["candidate_id"]
+                                if st.button(f"📥 Add to Job Form", key=f"sem_reassign_{cand['candidate_id']}", use_container_width=True, help="Load details into creation form to assign/re-assign candidate to an active job"):
+                                    st.session_state.parsed_candidate_data = cand
+                                    st.session_state.candidate_form_reset += 1
                                     st.rerun()
 
                         with act_col2:
-                            if cand.get("resume_path"):
-                                if st.button(f"📄 View CV", key=f"sem_cv_{cand['candidate_id']}", use_container_width=True):
-                                    st.session_state.resume_path_selected = cand["resume_path"]
-                                    st.rerun()
+                            if is_legacy:
+                                if cand.get("resume_path"):
+                                    if st.button(f"📄 View CV", key=f"sem_cv_{cand['candidate_id']}", use_container_width=True):
+                                        st.session_state.resume_path_selected = cand["resume_path"]
+                                        st.rerun()
+                                else:
+                                    st.caption("No CV on file")
                             else:
-                                st.caption("No CV on file")
-
-                        cand_status_val = cand.get("candidate_status") or cand.get("current_stage") or ""
-                        is_cand_deact_val = cand_status_val in ["Retired", "Deceased", "Inactive / Left Market", "Blacklisted"]
+                                if is_cand_locked_sem:
+                                    if st.session_state.user_role == "Admin":
+                                        if st.button(f"🔓 Unlock", key=f"sem_unlock_{cand['candidate_id']}", use_container_width=True, help=f"Locked: {sem_lock_reason}. Click to Admin Unlock with Remark"):
+                                            admin_unlock_candidate_dialog(cand["candidate_id"], c_name, sem_lock_reason, raw_cand_data=cand)
+                                    else:
+                                        st.markdown(f"<div style='text-align:center; padding-top:6px; font-size:12px;' title='Locked: {sem_lock_reason}'>🔒 Locked</div>", unsafe_allow_html=True)
+                                else:
+                                    if st.button(f"✏️ Edit Profile", key=f"sem_edit_{cand['candidate_id']}", use_container_width=True):
+                                        st.session_state.edit_candidate_id = cand["candidate_id"]
+                                        st.session_state.admin_unlocked_candidate_id = None
+                                        st.rerun()
 
                         with act_col3:
+                            if not is_legacy and cand.get("resume_path"):
+                                if st.button(f"📄 CV", key=f"sem_cv_active_{cand['candidate_id']}", use_container_width=True):
+                                    st.session_state.resume_path_selected = cand["resume_path"]
+                                    st.rerun()
+                            elif is_legacy:
+                                pass
+                            else:
+                                st.caption("No CV")
+
+                        with act_col4:
+                            cand_status_val = cand.get("candidate_status") or cand.get("current_stage") or ""
+                            is_cand_deact_val = cand_status_val in ["Retired", "Deceased", "Inactive / Left Market", "Blacklisted"]
                             if is_cand_deact_val:
                                 if st.button("🟢 Reactivate", key=f"sem_btn_react_{cand['candidate_id']}", use_container_width=True, help="Reactivate Candidate Profile"):
                                     reactivate_candidate_dialog(cand["candidate_id"], c_name, is_legacy=is_legacy, legacy_id=cand.get("legacy_candidate_id"), raw_cand_data=cand)
                             else:
-                                if st.button("🚫 Deactivate", key=f"sem_btn_deact_{cand['candidate_id']}", use_container_width=True, help="Deactivate or Archive Profile"):
-                                    deactivate_candidate_dialog(cand["candidate_id"], c_name, is_legacy=is_legacy, legacy_id=cand.get("legacy_candidate_id"), raw_cand_data=cand)
-
-                        with act_col4:
-                            st.markdown(f"<div style='font-size:12px; opacity:0.85; padding-top:6px;'>📞 <b>{cand.get('mobile_no', '-')}</b><br/>✉️ {cand.get('email', '-')}</div>", unsafe_allow_html=True)
+                                if is_cand_locked_sem:
+                                    st.markdown(f"<div style='font-size:12px; opacity:0.85; padding-top:6px;'>📞 <b>{cand.get('mobile_no', '-')}</b><br/>✉️ {cand.get('email', '-')}</div>", unsafe_allow_html=True)
+                                else:
+                                    if st.button("🚫 Deactivate", key=f"sem_btn_deact_{cand['candidate_id']}", use_container_width=True, help="Deactivate or Archive Profile"):
+                                        deactivate_candidate_dialog(cand["candidate_id"], c_name, is_legacy=is_legacy, legacy_id=cand.get("legacy_candidate_id"), raw_cand_data=cand)
             else:
                 st.info("No candidates matched your search criteria. Try broadening your keywords or lowering the score threshold.")
         else:
@@ -2028,6 +2224,16 @@ with right_col:
                         if st.button("🔗 Merge Profiles into Master", key=f"merge_btn_{d_idx}", use_container_width=True, type="primary"):
                             try:
                                 primary_id = primary_cand["candidate_id"]
+                                
+                                # Protect Joined candidates from being deleted as secondary profiles
+                                joined_secondary = [
+                                    sec for sec in secondary_cands 
+                                    if str(sec.get("current_stage") or "").strip() == "Joined" or str(sec.get("candidate_status") or "").strip() in ["Joined", "Hired"]
+                                ]
+                                if joined_secondary:
+                                    st.error(f"🚨 Cannot merge: Profile {joined_secondary[0].get('candidate_reference_no')} has already Joined and cannot be deleted. Please select the Joined profile as the Master Profile to merge into.")
+                                    st.stop()
+
                                 merged_notes = []
 
                                 for sec in secondary_cands:

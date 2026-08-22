@@ -96,7 +96,8 @@ def get_jobs():
             job_id,
             job_reference_no,
             job_title_id,
-            company_id
+            company_id,
+            job_status
             """
         )
         .execute()
@@ -229,6 +230,11 @@ job_display_lookup = {
 
 }
 
+job_status_lookup = {
+    job["job_id"]: job.get("job_status", "Open")
+    for job in jobs
+}
+
 
 # ==========================
 # SESSION VARIABLES
@@ -343,6 +349,7 @@ with left_col:
             c for c in raw_candidates 
             if (c.get("candidate_status") == "Shortlisted" or c.get("current_stage") == "Interview")
             and c.get("current_stage") not in terminal_stages
+            and job_status_lookup.get(c.get("job_id"), "Open") not in ["Closed", "Cancelled"]
         ]
     else:
         # In edit mode, include everyone so the dropdown always populates properly
@@ -697,6 +704,12 @@ with left_col:
                 st.error(f"🚨 This candidate already has an interview round named '{interview_round.strip()}'. Please use a different round name (e.g., L2, Final).")
                 st.stop()
                     
+            if not editing:
+                selected_job_status = job_status_lookup.get(selected_job_id, "Open")
+                if selected_job_status in ["Closed", "Cancelled"]:
+                    st.error(f"🚨 Cannot schedule interview: The associated job is {selected_job_status}.")
+                    st.stop()
+
             if not editing and already_selected:
                 st.error("🚨 This candidate has already been 'Selected'. The interview flow is complete, and no new rounds can be added.")
                 st.stop()
@@ -1146,17 +1159,26 @@ with right_col:
                 unsafe_allow_html=True
             )
 
-            # --- PREVIOUS ROUND LOCKING ENGINE (Auto-Healing Version) ---
+            # --- PREVIOUS ROUND & JOB CLOSURE LOCKING ENGINE ---
             c_stage = candidate_stage_lookup.get(item["candidate_id"])
+            j_status = job_status_lookup.get(item.get("job_id"), "Open")
             is_locked = False
+            lock_msg = ""
             
             # Rule 1: If HR has moved them to Offer/Joined, everything is permanently locked.
             if c_stage in ["Offer", "Joined"]:
                 is_locked = True
+                lock_msg = f"Candidate is in {c_stage} stage"
                 
-            # Rule 2: If the candidate has an active Selected/Rejected round, lock all OTHER rounds.
+            # Rule 2: If the candidate's associated Job is Closed or Cancelled
+            elif j_status in ["Closed", "Cancelled"]:
+                is_locked = True
+                lock_msg = f"Job is {j_status}"
+
+            # Rule 3: If the candidate has an active Selected/Rejected round, lock all OTHER rounds.
             elif item["candidate_id"] in terminal_candidates and status not in ["Selected", "Rejected"]:
                 is_locked = True
+                lock_msg = "Interview round completed"
 
             # SECURITY CHECK: Determine if the logged-in user has edit rights
             can_edit = False
@@ -1166,7 +1188,8 @@ with right_col:
                 can_edit = True
 
             if is_locked or not can_edit:
-                cols[6].markdown("<div style='margin-top:2px;'>🔒</div>", unsafe_allow_html=True)
+                help_tip = lock_msg if is_locked else "Not authorized"
+                cols[6].markdown(f"<div title='{help_tip}' style='margin-top:2px; font-size:16px; cursor:help;'>🔒</div>", unsafe_allow_html=True)
             else:
                 if cols[6].button(
                     "✏️",

@@ -143,11 +143,49 @@ def extract_text_from_docx(file_bytes: bytes) -> str:
         return ""
 
 
+def compute_approx_age(parsed: dict) -> int:
+    """
+    Computes candidate approximate age based on 10th, 12th, Graduation, PG years,
+    or total experience fallback (Benchmark year 2026).
+    """
+    curr_year = datetime.now().year
+    
+    # 1. Check 10th / SSC year (completed at age ~15)
+    tenth = int(parsed.get("tenth_passing_year", 0) or 0)
+    if 1950 <= tenth <= curr_year:
+        return max(18, min(80, (curr_year - tenth) + 15))
+        
+    # 2. Check 12th / HSC year (completed at age ~17)
+    twelfth = int(parsed.get("twelfth_passing_year", 0) or 0)
+    if 1950 <= twelfth <= curr_year:
+        return max(18, min(80, (curr_year - twelfth) + 17))
+        
+    # 3. Check Graduation year (completed at age ~21-22)
+    grad = int(parsed.get("graduation_year", 0) or 0)
+    if 1950 <= grad <= curr_year:
+        return max(18, min(80, (curr_year - grad) + 22))
+        
+    # 4. Check PG year (completed at age ~24)
+    pg = int(parsed.get("pg_passing_year", 0) or 0)
+    if 1950 <= pg <= curr_year:
+        return max(21, min(80, (curr_year - pg) + 24))
+        
+    # 5. Fallback via total experience (Career started at approx age 22)
+    exp_y = int(parsed.get("experience_years", 0) or 0)
+    return max(20, min(80, 22 + exp_y))
+
+
 def sanitize_parsed_output(parsed: dict) -> dict:
     """Sanitizes and normalizes extracted fields. Notice period, notice negotiable, and remarks are excluded."""
+    raw_gender = str(parsed.get("gender", "")).strip().capitalize()
+    if raw_gender not in ["Male", "Female", "Other"]:
+        raw_gender = "Not Specified"
+
     return {
         "first_name": str(parsed.get("first_name", "")).strip(),
         "last_name": str(parsed.get("last_name", "")).strip(),
+        "gender": raw_gender,
+        "approx_age": compute_approx_age(parsed),
         "email": str(parsed.get("email", "")).strip().lower(),
         "mobile_no": clean_phone(parsed.get("mobile_no", "")),
         "alternate_mobile": clean_phone(parsed.get("alternate_mobile", "")),
@@ -291,6 +329,11 @@ Extract candidate information from the resume into this exact JSON structure:
 {
   "first_name": "Candidate's First name",
   "last_name": "Candidate's Last name (or empty string if none)",
+  "gender": "Male, Female, Other, or Not Specified (inferred from salutations like Mr./Ms., pronouns, or explicitly stated personal details)",
+  "tenth_passing_year": 0,
+  "twelfth_passing_year": 0,
+  "graduation_year": 0,
+  "pg_passing_year": 0,
   "email": "Email address or empty string",
   "mobile_no": "10-digit primary mobile number or empty string",
   "alternate_mobile": "Secondary contact number or empty string",
@@ -308,9 +351,11 @@ Extract candidate information from the resume into this exact JSON structure:
 
 Important Rules:
 1. Extract first and last names cleanly (remove titles like Mr., Ms., Dr.).
-2. Calculate total professional experience accurately in full years (integer) and remaining months (0-11 integer).
-3. If CTC is not explicitly stated, return 0.0.
-4. Output valid JSON only.
+2. Extract 4-digit passing years for 10th (SSC), 12th (HSC), Graduation, or PG if mentioned in education history.
+3. Determine gender accurately from salutations (Mr. -> Male, Ms./Mrs. -> Female) or resume personal section. If unknown, set "Not Specified".
+4. Calculate total professional experience accurately in full years (integer) and remaining months (0-11 integer).
+5. If CTC is not explicitly stated, return 0.0.
+6. Output valid JSON only.
 """
 
     ext = os.path.splitext(filename or "")[1].lower()

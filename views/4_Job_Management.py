@@ -97,7 +97,7 @@ def get_all_candidates_for_matching():
             supabase
             .table("candidate_management")
             .select(
-                "candidate_id, candidate_reference_no, first_name, last_name, email, mobile_no, current_company, current_designation, skills, experience_years, experience_months, current_ctc, expected_ctc, current_location, candidate_status, current_stage, resume_path, job_id, created_by_name, created_by_user_id, created_on, remarks"
+                "candidate_id, candidate_reference_no, first_name, last_name, gender, approx_age, email, mobile_no, current_company, current_designation, skills, experience_years, experience_months, current_ctc, expected_ctc, current_location, candidate_status, current_stage, resume_path, job_id, created_by_name, created_by_user_id, created_on, remarks"
             )
             .order("candidate_id", desc=True)
             .limit(2000)
@@ -118,7 +118,7 @@ def get_all_candidates_for_matching():
             supabase
             .table("legacy_candidates")
             .select(
-                "legacy_candidate_id, candidate_reference_no, first_name, last_name, email, mobile_no, current_company, current_designation, skills, experience_years, experience_months, current_ctc, expected_ctc, current_location, notice_period, notice_negotiable, qualification, education_details, resume_name, resume_path, is_migrated_to_active, migrated_candidate_id"
+                "legacy_candidate_id, candidate_reference_no, first_name, last_name, gender, approx_age, email, mobile_no, current_company, current_designation, skills, experience_years, experience_months, current_ctc, expected_ctc, current_location, notice_period, notice_negotiable, qualification, education_details, resume_name, resume_path, is_migrated_to_active, migrated_candidate_id"
             )
             .order("legacy_candidate_id", desc=False)
             .limit(3000)
@@ -1216,20 +1216,29 @@ with right_col:
                         key=f"match_recency_{selected_match_job['job_id']}"
                     )
 
-            # Matcher Filters (Threshold, Pool, Stage)
-            f_col1, f_col2, f_col3 = st.columns([0.4, 0.3, 0.3])
+            # Matcher Filters (Threshold, Pool, Gender, Stage)
+            f_col1, f_col2, f_col3, f_col4 = st.columns([0.28, 0.24, 0.24, 0.24])
             with f_col1:
                 min_threshold = st.slider("Minimum Match Threshold (%)", min_value=15, max_value=90, value=35, step=5)
             with f_col2:
                 pool_filter = st.selectbox("Candidate Pool", ["All Pools (Live + Legacy)", "Live Pool Only", "Legacy Archive Only"])
             with f_col3:
-                stage_filter = st.selectbox("Filter by Candidate Current Stage", ["All Active Stages", "New", "Screening", "Shortlisted", "Applied", "Selected", "Deactivated / Inactive Only"])
+                gender_matcher_filter = st.selectbox("Gender Diversity Filter", ["All Genders", "👩 Female Only", "👨 Male Only", "Other / Not Specified"])
+            with f_col4:
+                stage_filter = st.selectbox("Filter by Candidate Stage", ["All Active Stages", "New", "Screening", "Shortlisted", "Applied", "Selected", "Deactivated / Inactive Only"])
                 
             filtered_cands = all_candidates_db
             if pool_filter == "Live Pool Only":
                 filtered_cands = [c for c in filtered_cands if not c.get("is_legacy", False)]
             elif pool_filter == "Legacy Archive Only":
                 filtered_cands = [c for c in filtered_cands if c.get("is_legacy", False)]
+
+            if gender_matcher_filter == "👩 Female Only":
+                filtered_cands = [c for c in filtered_cands if str(c.get("gender") or "").strip().lower() == "female"]
+            elif gender_matcher_filter == "👨 Male Only":
+                filtered_cands = [c for c in filtered_cands if str(c.get("gender") or "").strip().lower() == "male"]
+            elif gender_matcher_filter == "Other / Not Specified":
+                filtered_cands = [c for c in filtered_cands if str(c.get("gender") or "").strip().lower() not in ["male", "female"]]
 
             if stage_filter == "Deactivated / Inactive Only":
                 filtered_cands = [c for c in filtered_cands if (c.get("candidate_status") or "") in ["Retired", "Deceased", "Inactive / Left Market", "Blacklisted"] or (c.get("current_stage") or "") in ["Retired", "Deceased", "Inactive / Left Market", "Blacklisted"]]
@@ -1286,11 +1295,15 @@ with right_col:
                     else:
                         status_badge = "<span style='background:rgba(34, 197, 94, 0.15); color:#4ADE80; border:1px solid rgba(34, 197, 94, 0.35); font-size:11px; padding:2px 8px; border-radius:10px; font-weight:bold; margin-right:6px;'>🟢 Live Pool</span>"
                     
+                    cand_gender = c.get("gender") or "Not Specified"
+                    gender_icon = "👨" if cand_gender == "Male" else ("👩" if cand_gender == "Female" else "⚧")
+                    gender_badge = f"<span style='background:rgba(128, 128, 128, 0.12); color:#475569; border:1px solid rgba(128, 128, 128, 0.25); font-size:11px; padding:2px 8px; border-radius:10px; font-weight:600; margin-right:6px;'>{gender_icon} {cand_gender}</span>"
+
                     with st.container(border=True):
                         head_col1, head_col2 = st.columns([0.7, 0.3])
                         with head_col1:
                             st.markdown(
-                                f"{status_badge} <span style='font-size:16px; font-weight:700;'>#{idx} {c_ref} — {full_name}</span> &nbsp; <span style='opacity:0.8; font-size:13px;'>{c.get('current_designation', 'Candidate')} @ {c.get('current_company', 'N/A')}</span>",
+                                f"{status_badge} {gender_badge} <span style='font-size:16px; font-weight:700;'>#{idx} {c_ref} — {full_name}</span> &nbsp; <span style='opacity:0.8; font-size:13px;'>{c.get('current_designation', 'Candidate')} @ {c.get('current_company', 'N/A')}</span>",
                                 unsafe_allow_html=True
                             )
                         with head_col2:
@@ -1300,7 +1313,7 @@ with right_col:
                             )
 
                         if m.get("is_high_seniority"):
-                            st.warning(f"👴 **High Seniority Notice:** Candidate has ~{m['dynamic_exp']} Yrs total career experience (Base {m['base_exp']} Yrs + {m['elapsed_years']} Yrs progression). Verify if candidate is actively seeking roles or retired.")
+                            st.warning(f"👴 **High Seniority Advisory:** Candidate is estimated at ~{m['approx_age']} Yrs approx age / ~{m['dynamic_exp']} Yrs career experience (Base {m['base_exp']} Yrs + {m['elapsed_years']} Yrs progression). Verify active seeking status or retirement.")
 
                         st.markdown("<div style='height:4px;'></div>", unsafe_allow_html=True)
 
