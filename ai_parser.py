@@ -3,6 +3,7 @@ import re
 import io
 import json
 import base64
+from datetime import datetime
 import requests
 from dotenv import load_dotenv
 import streamlit as st
@@ -400,7 +401,11 @@ Important Rules:
     # -------------------------------------------------------------
     # 1. Try Gemini Key Pool & Models
     # -------------------------------------------------------------
-    gemini_models = ["gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.5-flash"]
+    env_gemini_model = os.getenv("GEMINI_MODEL", "").strip()
+    gemini_models = ["gemini-flash-lite-latest", "gemini-flash-latest", "gemini-1.5-flash", "gemini-2.0-flash-lite"]
+    if env_gemini_model and env_gemini_model not in gemini_models:
+        gemini_models.insert(0, env_gemini_model)
+
     for idx, key in enumerate(gemini_keys, 1):
         for model in gemini_models:
             success, data, msg = _call_gemini_api(key, model, gemini_payload)
@@ -416,7 +421,11 @@ Important Rules:
     # 2. Try Groq Key Pool (if Gemini keys exhausted or failed)
     # -------------------------------------------------------------
     if groq_keys and extracted_text:
-        groq_models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+        env_groq_model = os.getenv("GROQ_MODEL", "").strip()
+        groq_models = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.6-27b", "groq/compound-mini", "groq/compound"]
+        if env_groq_model and env_groq_model not in groq_models:
+            groq_models.insert(0, env_groq_model)
+
         for idx, key in enumerate(groq_keys, 1):
             for model in groq_models:
                 success, data, msg = _call_groq_api(key, model, system_prompt, extracted_text)
@@ -433,9 +442,12 @@ Important Rules:
     # -------------------------------------------------------------
     if openrouter_keys and extracted_text:
         openrouter_models = [
-            "meta-llama/llama-3.3-70b-instruct:free",
-            "google/gemini-2.0-flash-exp:free",
-            "mistralai/mistral-7b-instruct:free"
+            "google/gemma-4-26b-a4b-it:free",
+            "google/gemma-4-31b-it:free",
+            "nvidia/nemotron-3.5-lightning:free",
+            "dots-studio/dots-3-note-preview:free",
+            "liquid/lfm-2.5-2.6b:free",
+            "z-ai/glm-5.2:free"
         ]
         for idx, key in enumerate(openrouter_keys, 1):
             for model in openrouter_models:
@@ -449,4 +461,4 @@ Important Rules:
                     errors.append(f"OpenRouter ({model}): {msg}")
 
     err_summary = " | ".join(errors[-3:]) if errors else "All AI providers failed."
-    return False, {}, f"AI Parsing Failed: {err_summary}"
+    return False, {}, err_summary
