@@ -73,14 +73,16 @@ def _get_storage_base_dir() -> str:
     """
     Single source of truth for the local/OneDrive storage root.
     Reads from environment variable ATS_STORAGE_DIR or LOCAL_STORAGE_PATH.
-    Defaults to C:/Users/dell/Documents/OneDrive/Apps/ATS_Storage.
+    Defaults to C:/Users/dell/Documents/OneDrive/Apps/ATS_Storage on Windows, /tmp/ATS_Storage on Cloud.
     """
     env_dir = get_secret_val("ATS_STORAGE_DIR") or get_secret_val("LOCAL_STORAGE_PATH")
-    if env_dir and str(env_dir).strip():
+    if env_dir and str(env_dir).strip() and (os.name == 'nt' or not str(env_dir).startswith("C:")):
         base = str(env_dir).strip()
     else:
-        # Default local storage location
-        base = r"C:\Users\dell\Documents\OneDrive\Apps\ATS_Storage"
+        if os.name == 'nt':
+            base = r"C:\Users\dell\Documents\OneDrive\Apps\ATS_Storage"
+        else:
+            base = "/tmp/ATS_Storage"
     
     try:
         os.makedirs(base, exist_ok=True)
@@ -160,8 +162,10 @@ def _upload_to_onedrive_cloud(rel_path: str, file_bytes: bytes) -> bool:
     if not token:
         return False
     try:
+        import urllib.parse
         clean_path = rel_path.replace("\\", "/").strip("/")
-        url = f"https://graph.microsoft.com/v1.0/me/drive/root:/Apps/ATS_Storage/{clean_path}:/content"
+        encoded_path = urllib.parse.quote(clean_path, safe="/")
+        url = f"https://graph.microsoft.com/v1.0/me/drive/root:/Apps/ATS_Storage/{encoded_path}:/content"
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": get_mime_type(clean_path)
@@ -178,8 +182,10 @@ def _download_from_onedrive_cloud(rel_path: str) -> bytes:
     if not token:
         return None
     try:
+        import urllib.parse
         clean_path = rel_path.replace("\\", "/").strip("/")
-        url = f"https://graph.microsoft.com/v1.0/me/drive/root:/Apps/ATS_Storage/{clean_path}:/content"
+        encoded_path = urllib.parse.quote(clean_path, safe="/")
+        url = f"https://graph.microsoft.com/v1.0/me/drive/root:/Apps/ATS_Storage/{encoded_path}:/content"
         headers = {"Authorization": f"Bearer {token}"}
         res = requests.get(url, headers=headers, timeout=30)
         if res.status_code == 200:
