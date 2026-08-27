@@ -1,11 +1,73 @@
 import os
 import re
 import io
+import time
+import requests
 from dotenv import load_dotenv
 import streamlit as st
 from db import supabase
 
+try:
+    import msal
+except ImportError:
+    msal = None
+
 load_dotenv()
+
+# ==============================================================================
+# MICROSOFT GRAPH ONEDRIVE CONFIGURATION
+# ==============================================================================
+def get_secret_val(key: str, default: str = "") -> str:
+    val = os.getenv(key)
+    if val:
+        return val
+    try:
+        if key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        pass
+    return default
+
+MICROSOFT_CLIENT_ID = get_secret_val("MICROSOFT_CLIENT_ID", "")
+MICROSOFT_CLIENT_SECRET = get_secret_val("MICROSOFT_CLIENT_SECRET", "")
+MICROSOFT_TENANT_ID = get_secret_val("MICROSOFT_TENANT_ID", "common")
+MICROSOFT_REFRESH_TOKEN = get_secret_val("MICROSOFT_REFRESH_TOKEN", "")
+
+# In-memory token cache to minimize network calls
+_cached_msal_token = None
+_cached_token_expiry = 0
+
+def get_onedrive_access_token() -> str:
+    """
+    Returns a valid Microsoft Graph access token using the long-lived refresh token.
+    Caches the token in memory until 5 minutes before expiry.
+    """
+    global _cached_msal_token, _cached_token_expiry
+    now = time.time()
+    if _cached_msal_token and now < _cached_token_expiry - 300:
+        return _cached_msal_token
+
+    if not msal or not MICROSOFT_REFRESH_TOKEN:
+        return None
+
+    try:
+        app = msal.ConfidentialClientApplication(
+            MICROSOFT_CLIENT_ID,
+            client_credential=MICROSOFT_CLIENT_SECRET,
+            authority=f"https://login.microsoftonline.com/{MICROSOFT_TENANT_ID}"
+        )
+        res = app.acquire_token_by_refresh_token(
+            MICROSOFT_REFRESH_TOKEN,
+            scopes=["Files.ReadWrite.All", "User.Read"]
+        )
+        if "access_token" in res:
+            _cached_msal_token = res["access_token"]
+            _cached_token_expiry = now + int(res.get("expires_in", 3600))
+            return _cached_msal_token
+    except Exception:
+        pass
+    return None
+
 
 def _get_storage_base_dir() -> str:
     """
@@ -13,13 +75,7 @@ def _get_storage_base_dir() -> str:
     Reads from environment variable ATS_STORAGE_DIR or LOCAL_STORAGE_PATH.
     Defaults to C:/ATS_Storage (or project local ./storage_data).
     """
-    env_dir = os.getenv("ATS_STORAGE_DIR") or os.getenv("LOCAL_STORAGE_PATH")
-    if not env_dir:
-        try:
-            env_dir = st.secrets.get("ATS_STORAGE_DIR") or st.secrets.get("LOCAL_STORAGE_PATH")
-        except Exception:
-            pass
-
+    env_dir = get_secret_val("ATS_STORAGE_DIR") or get_secret_val("LOCAL_STORAGE_PATH")
     if env_dir and str(env_dir).strip():
         base = str(env_dir).strip()
     else:
@@ -99,9 +155,44 @@ def create_job_folder_structure(category_name: str, sub_category_name: str, job_
     }
 
 
+def _upload_to_onedrive_cloud(rel_path: str, file_bytes: bytes) -> bool:
+    """Uploads file content directly to Admin OneDrive via Microsoft Graph API."""
+    token = get_onedrive_access_token()
+    if not token:
+        return False
+    try:
+        clean_path = rel_path.replace("\\", "/").strip("/")
+        url = f"https://graph.microsoft.com/v1.0/me/drive/root:/ATS_Storage/{clean_path}:/content"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": get_mime_type(clean_path)
+        }
+        res = requests.put(url, headers=headers, data=file_bytes, timeout=30)
+        return res.status_code in [200, 201]
+    except Exception:
+        return False
+
+
+def _download_from_onedrive_cloud(rel_path: str) -> bytes:
+    """Downloads file content directly from Admin OneDrive via Microsoft Graph API."""
+    token = get_onedrive_access_token()
+    if not token:
+        return None
+    try:
+        clean_path = rel_path.replace("\\", "/").strip("/")
+        url = f"https://graph.microsoft.com/v1.0/me/drive/root:/ATS_Storage/{clean_path}:/content"
+        headers = {"Authorization": f"Bearer {token}"}
+        res = requests.get(url, headers=headers, timeout=30)
+        if res.status_code == 200:
+            return res.content
+    except Exception:
+        pass
+    return None
+
+
 def save_job_document(uploaded_file, category_name: str, sub_category_name: str, job_ref: str, custom_name: str = None) -> str:
     """
-    Saves a Job Document both locally/OneDrive AND uploads to Supabase Cloud Storage.
+    Saves a Job Document directly to Admin OneDrive Cloud (1 TB) and local storage.
     Returns the relative path for database storage.
     """
     if uploaded_file is None:
@@ -116,34 +207,32 @@ def save_job_document(uploaded_file, category_name: str, sub_category_name: str,
             file_bytes = uploaded_file.getvalue() if hasattr(uploaded_file, "getvalue") else uploaded_file.read()
 
         safe_name = sanitize_filename(original_name)
-        
-        # 1. Cloud Upload to Supabase Storage
-        try:
-            supabase.storage.from_("job_documents").upload(
-                safe_name, file_bytes, {"upsert": "true"}
-            )
-        except Exception as cloud_err:
-            pass # Non-blocking if cloud upload fails or already exists
+        cat = sanitize_folder_name(category_name)
+        sub = sanitize_folder_name(sub_category_name)
+        jr = sanitize_folder_name(job_ref)
+        rel_path = f"{cat}/{sub}/{jr}/Job_Documents/{safe_name}"
 
-        # 2. Local / OneDrive Save
+        # 1. Upload to Admin OneDrive Cloud (1 TB Storage)
+        _upload_to_onedrive_cloud(rel_path, file_bytes)
+
+        # 2. Upload to Supabase Storage Backup
+        try:
+            supabase.storage.from_("job_documents").upload(safe_name, file_bytes, {"upsert": "true"})
+        except Exception:
+            pass
+
+        # 3. Save to Local Disk if writable
         try:
             abs_path = os.path.join(dirs["job_documents_dir"], safe_name)
             with open(abs_path, "wb") as f:
                 f.write(file_bytes)
-                
-            # Also save to flat folder
             flat_path = os.path.join(JOB_DOCS_DIR, safe_name)
             with open(flat_path, "wb") as f:
                 f.write(file_bytes)
-                
-            rel_path = os.path.relpath(abs_path, STORAGE_BASE_DIR).replace("\\", "/")
-            return rel_path
         except Exception:
-            # If local filesystem is read-only (Streamlit Cloud), return relative cloud path
-            cat = sanitize_folder_name(category_name)
-            sub = sanitize_folder_name(sub_category_name)
-            jr = sanitize_folder_name(job_ref)
-            return f"{cat}/{sub}/{jr}/Job_Documents/{safe_name}"
+            pass
+
+        return rel_path
 
     except Exception as e:
         st.error(f"Storage Save Error (Job Doc): {str(e)}")
@@ -152,7 +241,7 @@ def save_job_document(uploaded_file, category_name: str, sub_category_name: str,
 
 def save_candidate_resume(uploaded_file, category_name: str, sub_category_name: str, job_ref: str, custom_name: str = None) -> str:
     """
-    Saves a Candidate Resume both locally/OneDrive AND uploads to Supabase Cloud Storage.
+    Saves a Candidate Resume directly to Admin OneDrive Cloud (1 TB) and local storage.
     Returns the relative path for database storage.
     """
     if uploaded_file is None:
@@ -167,33 +256,32 @@ def save_candidate_resume(uploaded_file, category_name: str, sub_category_name: 
             file_bytes = uploaded_file.getvalue() if hasattr(uploaded_file, "getvalue") else uploaded_file.read()
 
         safe_name = sanitize_filename(original_name)
-        
-        # 1. Cloud Upload to Supabase Storage (so all cloud users can access immediately)
+        cat = sanitize_folder_name(category_name)
+        sub = sanitize_folder_name(sub_category_name)
+        jr = sanitize_folder_name(job_ref)
+        rel_path = f"{cat}/{sub}/{jr}/Resumes/{safe_name}"
+
+        # 1. Upload to Admin OneDrive Cloud (1 TB Storage)
+        _upload_to_onedrive_cloud(rel_path, file_bytes)
+
+        # 2. Upload to Supabase Storage Backup
         try:
-            supabase.storage.from_("Resume").upload(
-                safe_name, file_bytes, {"upsert": "true"}
-            )
-        except Exception as cloud_err:
+            supabase.storage.from_("Resume").upload(safe_name, file_bytes, {"upsert": "true"})
+        except Exception:
             pass
 
-        # 2. Local / OneDrive Save
+        # 3. Save to Local Disk if writable
         try:
             abs_path = os.path.join(dirs["resumes_dir"], safe_name)
             with open(abs_path, "wb") as f:
                 f.write(file_bytes)
-                
-            # Also save to flat folder
             flat_path = os.path.join(RESUMES_DIR, safe_name)
             with open(flat_path, "wb") as f:
                 f.write(file_bytes)
-                
-            rel_path = os.path.relpath(abs_path, STORAGE_BASE_DIR).replace("\\", "/")
-            return rel_path
         except Exception:
-            cat = sanitize_folder_name(category_name)
-            sub = sanitize_folder_name(sub_category_name)
-            jr = sanitize_folder_name(job_ref)
-            return f"{cat}/{sub}/{jr}/Resumes/{safe_name}"
+            pass
+
+        return rel_path
 
     except Exception as e:
         st.error(f"Storage Save Error (Resume): {str(e)}")
@@ -236,14 +324,15 @@ def resolve_file_path(path_or_filename: str, category: str = None) -> str:
 
 def read_file_bytes(path_or_filename: str, category: str = None) -> bytes:
     """
-    Reads and returns file bytes. 
-    First checks local disk / OneDrive. If not found (e.g. running on Cloud or unsynced PC),
-    automatically downloads directly from Supabase Cloud Storage.
+    Reads and returns file bytes:
+    1. Checks local disk / OneDrive folder.
+    2. If not found locally (Streamlit Cloud or non-synced machine), downloads directly from Admin OneDrive Cloud.
+    3. Fallback to Supabase Cloud Storage.
     """
     if not path_or_filename:
         return None
         
-    # 1. Check Local / OneDrive
+    # 1. Check Local / OneDrive Disk
     abs_path = resolve_file_path(path_or_filename, category)
     if abs_path and os.path.exists(abs_path):
         try:
@@ -252,42 +341,45 @@ def read_file_bytes(path_or_filename: str, category: str = None) -> bytes:
         except Exception:
             pass
 
-    # 2. Hybrid Cloud Fallback: Download from Supabase Storage
-    target_name = os.path.basename(str(path_or_filename).strip())
-    
-    # Determine bucket
-    if "job_doc" in str(path_or_filename).lower() or (category and "job" in str(category).lower()):
-        bucket = "job_documents"
-    else:
-        bucket = "Resume"
+    # 2. Download from Admin OneDrive Cloud (1 TB Storage)
+    clean_rel = str(path_or_filename).replace("\\", "/").strip("/")
+    data = _download_from_onedrive_cloud(clean_rel)
+    if not data:
+        # Try with basename in flat OneDrive folders
+        target_name = os.path.basename(clean_rel)
+        if "job" in clean_rel.lower() or (category and "job" in str(category).lower()):
+            data = _download_from_onedrive_cloud(f"job_documents/{target_name}")
+        elif "legacy" in clean_rel.lower():
+            data = _download_from_onedrive_cloud(f"legacy_resumes/{target_name}")
+        else:
+            data = _download_from_onedrive_cloud(f"resumes/{target_name}")
 
+    if data:
+        # Cache locally if possible
+        try:
+            if abs_path:
+                os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+                with open(abs_path, "wb") as f:
+                    f.write(data)
+        except Exception:
+            pass
+        return data
+
+    # 3. Fallback: Download from Supabase Storage
+    target_name = os.path.basename(clean_rel)
+    bucket = "job_documents" if "job" in clean_rel.lower() else "Resume"
     try:
         data = supabase.storage.from_(bucket).download(target_name)
         if data:
-            # Cache locally if possible
-            try:
-                if abs_path:
-                    os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-                    with open(abs_path, "wb") as f:
-                        f.write(data)
-            except Exception:
-                pass
             return data
     except Exception:
-        # Fallback to alternative bucket
-        alt_bucket = "job_documents" if bucket == "Resume" else "Resume"
-        try:
-            data = supabase.storage.from_(alt_bucket).download(target_name)
-            if data:
-                return data
-        except Exception:
-            pass
+        pass
 
     return None
 
 
 def file_exists(path_or_filename: str, category: str = None) -> bool:
-    """Checks if the file exists locally or in Supabase cloud storage."""
+    """Checks if the file exists locally, in OneDrive, or in Supabase."""
     if not path_or_filename:
         return False
     abs_path = resolve_file_path(path_or_filename, category)
