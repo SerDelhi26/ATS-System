@@ -107,7 +107,8 @@ def clean_phone(phone_str: str) -> str:
     """Extracts the last 10 digits from a phone string."""
     if not phone_str:
         return ""
-    digits = re.sub(r'\D', '', str(phone_str))
+    cleaned = re.sub(r'\.0+$', '', str(phone_str).strip())
+    digits = re.sub(r'\D', '', cleaned)
     return digits[-10:] if len(digits) >= 10 else digits
 
 

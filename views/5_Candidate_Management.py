@@ -54,10 +54,11 @@ def sanitize_filename(filename):
     return storage.sanitize_filename(filename)
 
 def normalize_phone(phone):
-    """Strips country codes and spaces. Returns only the last 10 digits."""
+    """Strips country codes, decimals, and spaces. Returns only the last 10 digits."""
     if not phone:
         return ""
-    digits = re.sub(r'\D', '', str(phone))
+    cleaned = re.sub(r'\.0+$', '', str(phone).strip())
+    digits = re.sub(r'\D', '', cleaned)
     return digits[-10:] if len(digits) >= 10 else digits
 
 

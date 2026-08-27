@@ -70,9 +70,9 @@ st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 @st.cache_data(ttl=15)
 def get_dashboard_data():
     jobs = supabase.table("job_management").select("job_id, job_reference_no, job_status, openings, company_id, job_title_id, created_date, created_by").execute().data or []
-    candidates = supabase.table("candidate_management").select("candidate_id, candidate_reference_no, first_name, last_name, job_id, current_stage, candidate_status, created_by_name, created_on").execute().data or []
-    interviews = supabase.table("interview_management").select("interview_id, candidate_id, interview_status, created_by_name").execute().data or []
-    offers = supabase.table("offer_management").select("candidate_id, offer_status, offered_ctc").execute().data or []
+    candidates = supabase.table("candidate_management").select("candidate_id, candidate_reference_no, first_name, last_name, job_id, current_stage, candidate_status, created_by_name, created_on, updated_on, mobile_no, email, current_company, current_designation, experience_years, experience_months, current_ctc, expected_ctc, notice_period, remarks").execute().data or []
+    interviews = supabase.table("interview_management").select("interview_id, candidate_id, job_id, interview_round, interview_date, interview_status, feedback, created_by_name, created_on").execute().data or []
+    offers = supabase.table("offer_management").select("offer_id, candidate_id, job_id, offer_status, offered_ctc, joining_date, remarks, created_by_name, created_on").execute().data or []
     recruiters = supabase.table("users").select("user_id, full_name").eq("role", "Recruiter").execute().data or []
     job_titles = supabase.table("job_title_master").select("job_title_id, job_title_name").execute().data or []
     companies = supabase.table("company_master").select("company_id, company_name").execute().data or []
@@ -99,11 +99,13 @@ for job in jobs:
 def parse_date(date_str):
     if not date_str:
         return None
-    try:
-        clean_time = str(date_str).split(".")[0].split("+")[0].replace("Z", "")
-        return datetime.strptime(clean_time, "%Y-%m-%dT%H:%M:%S").date()
-    except:
-        return None
+    clean_time = str(date_str).split(".")[0].split("+")[0].replace("Z", "").strip()
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(clean_time, fmt).date()
+        except Exception:
+            pass
+    return None
 
 # Helper function to convert 0 to None for cleaner UI rendering in tables
 def clean_zero(val):
@@ -259,8 +261,8 @@ for recruiter in recruiters:
     
     pipeline_total = len(r_cands)
     shortlisted = len([c for c in r_cands if c.get("current_stage") == "Shortlisted" or c.get("candidate_status") == "Shortlisted"])
-    interviews = len([c for c in r_cands if c.get("current_stage") == "Interview"])
-    offers = len([c for c in r_cands if c.get("current_stage") == "Offer" or c.get("candidate_status") in ["Offer Released", "Offer Accepted"]])
+    interviews_cnt = len([c for c in r_cands if c.get("current_stage") == "Interview"])
+    offers_cnt = len([c for c in r_cands if c.get("current_stage") == "Offer" or c.get("candidate_status") in ["Offer Released", "Offer Accepted"]])
     hires = len([c for c in r_cands if c.get("current_stage") == "Joined" or c.get("candidate_status") in ["Joined", "Hired"]])
     
     conversion = (hires / pipeline_total * 100) if pipeline_total > 0 else 0
@@ -270,8 +272,8 @@ for recruiter in recruiters:
         "Recruiter": r_name,
         "Total Pipeline": clean_zero(pipeline_total),
         "Shortlisted": clean_zero(shortlisted),
-        "In Interview": clean_zero(interviews),
-        "Offered": clean_zero(offers),
+        "In Interview": clean_zero(interviews_cnt),
+        "Offered": clean_zero(offers_cnt),
         "Hired": clean_zero(hires),
         "Conversion Rate": conversion
     })
@@ -301,6 +303,252 @@ if not perf_df.empty:
     )
 else:
     st.info("No recruiter performance data found for the selected filters.")
+
+
+
+# ==============================================================================
+# 🔥 HOT PIPELINE RADAR (High-Priority Candidates Nearing Offer / Joining)
+# ==============================================================================
+st.divider()
+st.markdown("### 🔥 Hot Pipeline Radar")
+st.caption("High-priority talent close to conversion, active offers in-flight, and stalled candidates requiring immediate recruiter intervention.")
+
+# Lookup maps for jobs and companies
+job_obj_map = {j["job_id"]: j for j in jobs}
+interview_cand_map = {}
+for iv in interviews:
+    cid = iv.get("candidate_id")
+    if cid:
+        if cid not in interview_cand_map:
+            interview_cand_map[cid] = []
+        interview_cand_map[cid].append(iv)
+
+radar_tab1, radar_tab2, radar_tab3 = st.tabs([
+    "👑 Ready for Offer",
+    "⏳ Pending Acceptance & Joining",
+    "🚨 Stagnant / At-Risk Talent (>7 Days)"
+])
+
+# ------------------------------------------------------------------------------
+# TAB 1: READY FOR OFFER
+# ------------------------------------------------------------------------------
+with radar_tab1:
+    ready_candidates = []
+    
+    for c in filtered_candidates:
+        cid = c.get("candidate_id")
+        c_stage = (c.get("current_stage") or "").strip()
+        c_status = (c.get("candidate_status") or "").strip()
+        
+        # Check if candidate is marked as Selected or cleared final interviews
+        c_interviews = interview_cand_map.get(cid, [])
+        has_selected_interview = any(iv.get("interview_status") == "Selected" for iv in c_interviews)
+        
+        cand_offer = offer_map.get(cid)
+        off_status = (cand_offer.get("offer_status") or "").strip() if cand_offer else ""
+        
+        is_selected = (c_stage in ["Selected", "Final Round", "Shortlisted"] or c_status in ["Selected", "Shortlisted"] or has_selected_interview)
+        is_not_offered_yet = off_status not in ["Offered", "Offer Released", "Offer Accepted", "Joined", "Hired"]
+        is_not_rejected = c_status not in ["Rejected", "Offer Rejected", "Declined", "Cancelled", "Joined", "Hired"]
+        
+        if is_selected and is_not_offered_yet and is_not_rejected:
+            # Calculate days since last update / creation
+            act_date = parse_date(c.get("updated_on") or c.get("created_on"))
+            days_waiting = (date.today() - act_date).days if act_date else 0
+            
+            job_obj = job_obj_map.get(c.get("job_id"), {})
+            title_name = job_title_lookup.get(job_obj.get("job_title_id"), "Role N/A")
+            comp_name = company_lookup.get(job_obj.get("company_id"), "Client N/A")
+            
+            exp_y = c.get("experience_years") or 0
+            exp_m = c.get("experience_months") or 0
+            exp_str = f"{exp_y}Y {exp_m}M" if (exp_y or exp_m) else "N/A"
+            
+            c_ctc = float(c.get("current_ctc")) if c.get("current_ctc") else None
+            e_ctc = float(c.get("expected_ctc")) if c.get("expected_ctc") else None
+            
+            ready_candidates.append({
+                "Recruiter": c.get("created_by_name") or "Unassigned",
+                "Candidate Name": f"{c.get('first_name', '')} {c.get('last_name', '')}".strip() or "Unnamed",
+                "Target Role & Client": f"💼 {title_name} ({comp_name})",
+                "Current Stage": f"🌟 {c_stage or 'Selected'}",
+                "Experience": exp_str,
+                "Notice Period": c.get("notice_period") or "Standard",
+                "Current CTC": c_ctc,
+                "Expected CTC": e_ctc,
+                "Mobile": c.get("mobile_no") or "N/A",
+                "Days in Stage": f"⏱️ {days_waiting} days ago" if days_waiting > 0 else "Today",
+                "_days_num": days_waiting
+            })
+
+    if ready_candidates:
+        df_ready = pd.DataFrame(ready_candidates).sort_values(by="_days_num", ascending=False).drop(columns=["_days_num"])
+        
+        r_c1, r_c2, r_c3 = st.columns(3)
+        r_c1.metric("👑 Candidates Awaiting Offer", len(ready_candidates))
+        immediate_cnt = len([r for r in ready_candidates if "immediate" in str(r.get("Notice Period", "")).lower() or "0" in str(r.get("Notice Period", ""))])
+        r_c2.metric("⚡ Immediate / Short Notice Joiners", immediate_cnt)
+        avg_exp_ctc = sum(r["Expected CTC"] for r in ready_candidates if r["Expected CTC"]) / max(1, len([r for r in ready_candidates if r["Expected CTC"]]))
+        r_c3.metric("💰 Avg Expected CTC", f"₹{avg_exp_ctc:,.0f}" if avg_exp_ctc > 0 else "N/A")
+        
+        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+        st.dataframe(
+            df_ready,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Current CTC": st.column_config.NumberColumn("Current CTC", format="₹%d"),
+                "Expected CTC": st.column_config.NumberColumn("Expected CTC", format="₹%d"),
+                "Candidate Name": st.column_config.TextColumn("Candidate Name", width="medium"),
+                "Target Role & Client": st.column_config.TextColumn("Target Role & Client", width="large")
+            }
+        )
+    else:
+        st.info("🌟 No candidates currently waiting for an offer release.")
+
+# ------------------------------------------------------------------------------
+# TAB 2: PENDING ACCEPTANCE & JOINING
+# ------------------------------------------------------------------------------
+with radar_tab2:
+    pending_offers = []
+    
+    for c in filtered_candidates:
+        cid = c.get("candidate_id")
+        cand_offer = offer_map.get(cid)
+        c_stage = (c.get("current_stage") or "").strip()
+        c_status = (c.get("candidate_status") or "").strip()
+        
+        off_status = (cand_offer.get("offer_status") or "").strip() if cand_offer else ""
+        if not off_status and c_stage in ["Offer", "Offer Released", "Offer Accepted"]:
+            off_status = c_stage
+            
+        is_in_offer_flight = off_status in ["Offered", "Offer Released", "Sent to Candidate", "Offer Sent", "Offer Accepted", "Offer"]
+        is_not_joined = c_stage not in ["Joined", "Hired"] and c_status not in ["Joined", "Hired"]
+        is_not_declined = off_status not in ["Offer Rejected", "Declined", "Revoked"] and c_status not in ["Offer Rejected", "Declined"]
+        
+        if is_in_offer_flight and is_not_joined and is_not_declined:
+            job_obj = job_obj_map.get(c.get("job_id"), {})
+            title_name = job_title_lookup.get(job_obj.get("job_title_id"), "Role N/A")
+            comp_name = company_lookup.get(job_obj.get("company_id"), "Client N/A")
+            
+            offered_ctc_val = float(cand_offer.get("offered_ctc")) if (cand_offer and cand_offer.get("offered_ctc")) else (float(c.get("expected_ctc")) if c.get("expected_ctc") else None)
+            
+            join_date_raw = cand_offer.get("joining_date") if cand_offer else None
+            join_date_parsed = parse_date(join_date_raw)
+            
+            if join_date_parsed:
+                days_to_join = (join_date_parsed - date.today()).days
+                if days_to_join > 0:
+                    join_label = f"📅 {join_date_parsed.strftime('%d %b %Y')} (in {days_to_join}d)"
+                elif days_to_join == 0:
+                    join_label = f"🚨 Joining Today! ({join_date_parsed.strftime('%d %b')})"
+                else:
+                    join_label = f"⚠️ Overdue ({abs(days_to_join)}d ago)"
+            else:
+                join_label = "⏳ To be Confirmed"
+                
+            status_badge = "🟢 Offer Accepted (Joining Soon)" if "Accepted" in off_status else "🟡 Offer Released (Awaiting Response)"
+            
+            pending_offers.append({
+                "Recruiter": c.get("created_by_name") or "Unassigned",
+                "Candidate Name": f"{c.get('first_name', '')} {c.get('last_name', '')}".strip() or "Unnamed",
+                "Job & Client": f"💼 {title_name} ({comp_name})",
+                "Offer Stage": status_badge,
+                "Offered CTC": offered_ctc_val,
+                "Expected Joining Date": join_label,
+                "Mobile": c.get("mobile_no") or "N/A",
+                "Email": c.get("email") or "N/A"
+            })
+
+    if pending_offers:
+        df_offers = pd.DataFrame(pending_offers)
+        
+        o_c1, o_c2, o_c3 = st.columns(3)
+        o_c1.metric("📄 Active Offers in Flight", len(pending_offers))
+        accepted_cnt = len([o for o in pending_offers if "Accepted" in o["Offer Stage"]])
+        o_c2.metric("🟢 Accepted & Awaiting Joining", accepted_cnt)
+        total_offered_val = sum(o["Offered CTC"] for o in pending_offers if o["Offered CTC"])
+        o_c3.metric("💼 Pipeline CTC Value", f"₹{total_offered_val:,.0f}" if total_offered_val > 0 else "N/A")
+        
+        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+        st.dataframe(
+            df_offers,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Offered CTC": st.column_config.NumberColumn("Offered CTC", format="₹%d"),
+                "Candidate Name": st.column_config.TextColumn("Candidate Name", width="medium"),
+                "Job & Client": st.column_config.TextColumn("Job & Client", width="large")
+            }
+        )
+    else:
+        st.info("📄 No active offers currently pending acceptance or joining.")
+
+# ------------------------------------------------------------------------------
+# TAB 3: STAGNANT / AT-RISK TALENT (>7 DAYS)
+# ------------------------------------------------------------------------------
+with radar_tab3:
+    stagnant_candidates = []
+    
+    for c in filtered_candidates:
+        cid = c.get("candidate_id")
+        c_stage = (c.get("current_stage") or "").strip()
+        c_status = (c.get("candidate_status") or "").strip()
+        
+        # Only active in-progress candidates
+        is_in_pipeline = c_stage in ["New", "Screening", "Shortlisted", "Interview", "Selected"]
+        is_not_terminal = c_status not in ["Rejected", "Joined", "Hired", "Offer Rejected", "Declined", "Cancelled"]
+        
+        if is_in_pipeline and is_not_terminal:
+            act_date = parse_date(c.get("updated_on") or c.get("created_on"))
+            days_inactive = (date.today() - act_date).days if act_date else 0
+            
+            if days_inactive >= 7:
+                job_obj = job_obj_map.get(c.get("job_id"), {})
+                title_name = job_title_lookup.get(job_obj.get("job_title_id"), "Role N/A")
+                comp_name = company_lookup.get(job_obj.get("company_id"), "Client N/A")
+                
+                if days_inactive >= 14:
+                    delay_badge = f"🔴 {days_inactive} Days Stalled"
+                    action_suggest = "🚨 Urgent: Follow-up or reassign"
+                else:
+                    delay_badge = f"🟡 {days_inactive} Days Inactive"
+                    action_suggest = "⚠️ Schedule Interview / Log Feedback"
+                    
+                stagnant_candidates.append({
+                    "Recruiter": c.get("created_by_name") or "Unassigned",
+                    "Candidate Name": f"{c.get('first_name', '')} {c.get('last_name', '')}".strip() or "Unnamed",
+                    "Job & Client": f"💼 {title_name} ({comp_name})",
+                    "Current Stage": c_stage or "Applied",
+                    "Stagnancy": delay_badge,
+                    "Recommended Action": action_suggest,
+                    "Mobile": c.get("mobile_no") or "N/A",
+                    "_days_num": days_inactive
+                })
+
+    if stagnant_candidates:
+        df_stagnant = pd.DataFrame(stagnant_candidates).sort_values(by="_days_num", ascending=False).drop(columns=["_days_num"])
+        
+        s_c1, s_c2, s_c3 = st.columns(3)
+        s_c1.metric("🚨 Stagnant Candidates (>7d)", len(stagnant_candidates))
+        crit_count = len([s for s in stagnant_candidates if "🔴" in s["Stagnancy"]])
+        s_c2.metric("🔴 Critical Delays (>14d)", crit_count)
+        stuck_recruiters = len(set(s["Recruiter"] for s in stagnant_candidates))
+        s_c3.metric("👥 Recruiters with Bottlenecks", stuck_recruiters)
+        
+        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+        st.dataframe(
+            df_stagnant,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Candidate Name": st.column_config.TextColumn("Candidate Name", width="medium"),
+                "Job & Client": st.column_config.TextColumn("Job & Client", width="large"),
+                "Recommended Action": st.column_config.TextColumn("Action Required", width="large")
+            }
+        )
+    else:
+        st.success("🌟 Great job! No candidates are currently stagnant or delayed past 7 days.")
 
 
 # ==========================
