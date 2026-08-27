@@ -1,7 +1,9 @@
 import os
 import re
+import io
 from dotenv import load_dotenv
 import streamlit as st
+from db import supabase
 
 load_dotenv()
 
@@ -12,31 +14,40 @@ def _get_storage_base_dir() -> str:
     Defaults to C:/ATS_Storage (or project local ./storage_data).
     """
     env_dir = os.getenv("ATS_STORAGE_DIR") or os.getenv("LOCAL_STORAGE_PATH")
-    if env_dir and env_dir.strip():
-        base = env_dir.strip()
+    if not env_dir:
+        try:
+            env_dir = st.secrets.get("ATS_STORAGE_DIR") or st.secrets.get("LOCAL_STORAGE_PATH")
+        except Exception:
+            pass
+
+    if env_dir and str(env_dir).strip():
+        base = str(env_dir).strip()
     else:
         # Default local storage location
-        base = r"C:\ATS_Storage"
+        base = r"C:\Users\dell\Documents\OneDrive\Apps\ATS_Storage"
     
     try:
         os.makedirs(base, exist_ok=True)
         return os.path.abspath(base)
     except Exception:
-        # Fallback to current workspace storage_data if C:\ is not writable
+        # Fallback to local temporary storage if Windows path is not accessible (e.g. Streamlit Cloud Linux)
         fallback = os.path.join(os.path.dirname(os.path.abspath(__file__)), "storage_data")
         os.makedirs(fallback, exist_ok=True)
         return os.path.abspath(fallback)
 
 STORAGE_BASE_DIR = _get_storage_base_dir()
 
-# Legacy / Flat subdirectories fallback
+# Flat subdirectories
 RESUMES_DIR = os.path.join(STORAGE_BASE_DIR, "resumes")
 JOB_DOCS_DIR = os.path.join(STORAGE_BASE_DIR, "job_documents")
 LEGACY_RESUMES_DIR = os.path.join(STORAGE_BASE_DIR, "legacy_resumes")
 
-os.makedirs(RESUMES_DIR, exist_ok=True)
-os.makedirs(JOB_DOCS_DIR, exist_ok=True)
-os.makedirs(LEGACY_RESUMES_DIR, exist_ok=True)
+try:
+    os.makedirs(RESUMES_DIR, exist_ok=True)
+    os.makedirs(JOB_DOCS_DIR, exist_ok=True)
+    os.makedirs(LEGACY_RESUMES_DIR, exist_ok=True)
+except Exception:
+    pass
 
 
 def sanitize_filename(filename: str) -> str:
@@ -76,8 +87,11 @@ def create_job_folder_structure(category_name: str, sub_category_name: str, job_
     job_folder = get_job_folder(category_name, sub_category_name, job_ref)
     jd_dir = os.path.join(job_folder, "Job_Documents")
     resumes_dir = os.path.join(job_folder, "Resumes")
-    os.makedirs(jd_dir, exist_ok=True)
-    os.makedirs(resumes_dir, exist_ok=True)
+    try:
+        os.makedirs(jd_dir, exist_ok=True)
+        os.makedirs(resumes_dir, exist_ok=True)
+    except Exception:
+        pass
     return {
         "job_folder": job_folder,
         "job_documents_dir": jd_dir,
@@ -87,8 +101,8 @@ def create_job_folder_structure(category_name: str, sub_category_name: str, job_
 
 def save_job_document(uploaded_file, category_name: str, sub_category_name: str, job_ref: str, custom_name: str = None) -> str:
     """
-    Saves a Job Document inside <Category>/<SubCategory>/<JR>/Job_Documents/
-    Returns the relative path from STORAGE_BASE_DIR for database storage.
+    Saves a Job Document both locally/OneDrive AND uploads to Supabase Cloud Storage.
+    Returns the relative path for database storage.
     """
     if uploaded_file is None:
         return None
@@ -102,14 +116,35 @@ def save_job_document(uploaded_file, category_name: str, sub_category_name: str,
             file_bytes = uploaded_file.getvalue() if hasattr(uploaded_file, "getvalue") else uploaded_file.read()
 
         safe_name = sanitize_filename(original_name)
-        abs_path = os.path.join(dirs["job_documents_dir"], safe_name)
+        
+        # 1. Cloud Upload to Supabase Storage
+        try:
+            supabase.storage.from_("job_documents").upload(
+                safe_name, file_bytes, {"upsert": "true"}
+            )
+        except Exception as cloud_err:
+            pass # Non-blocking if cloud upload fails or already exists
 
-        with open(abs_path, "wb") as f:
-            f.write(file_bytes)
+        # 2. Local / OneDrive Save
+        try:
+            abs_path = os.path.join(dirs["job_documents_dir"], safe_name)
+            with open(abs_path, "wb") as f:
+                f.write(file_bytes)
+                
+            # Also save to flat folder
+            flat_path = os.path.join(JOB_DOCS_DIR, safe_name)
+            with open(flat_path, "wb") as f:
+                f.write(file_bytes)
+                
+            rel_path = os.path.relpath(abs_path, STORAGE_BASE_DIR).replace("\\", "/")
+            return rel_path
+        except Exception:
+            # If local filesystem is read-only (Streamlit Cloud), return relative cloud path
+            cat = sanitize_folder_name(category_name)
+            sub = sanitize_folder_name(sub_category_name)
+            jr = sanitize_folder_name(job_ref)
+            return f"{cat}/{sub}/{jr}/Job_Documents/{safe_name}"
 
-        # Store as standard forward-slash relative path
-        rel_path = os.path.relpath(abs_path, STORAGE_BASE_DIR).replace("\\", "/")
-        return rel_path
     except Exception as e:
         st.error(f"Storage Save Error (Job Doc): {str(e)}")
         return None
@@ -117,8 +152,8 @@ def save_job_document(uploaded_file, category_name: str, sub_category_name: str,
 
 def save_candidate_resume(uploaded_file, category_name: str, sub_category_name: str, job_ref: str, custom_name: str = None) -> str:
     """
-    Saves a Candidate Resume inside <Category>/<SubCategory>/<JR>/Resumes/
-    Returns the relative path from STORAGE_BASE_DIR for database storage.
+    Saves a Candidate Resume both locally/OneDrive AND uploads to Supabase Cloud Storage.
+    Returns the relative path for database storage.
     """
     if uploaded_file is None:
         return None
@@ -132,14 +167,34 @@ def save_candidate_resume(uploaded_file, category_name: str, sub_category_name: 
             file_bytes = uploaded_file.getvalue() if hasattr(uploaded_file, "getvalue") else uploaded_file.read()
 
         safe_name = sanitize_filename(original_name)
-        abs_path = os.path.join(dirs["resumes_dir"], safe_name)
+        
+        # 1. Cloud Upload to Supabase Storage (so all cloud users can access immediately)
+        try:
+            supabase.storage.from_("Resume").upload(
+                safe_name, file_bytes, {"upsert": "true"}
+            )
+        except Exception as cloud_err:
+            pass
 
-        with open(abs_path, "wb") as f:
-            f.write(file_bytes)
+        # 2. Local / OneDrive Save
+        try:
+            abs_path = os.path.join(dirs["resumes_dir"], safe_name)
+            with open(abs_path, "wb") as f:
+                f.write(file_bytes)
+                
+            # Also save to flat folder
+            flat_path = os.path.join(RESUMES_DIR, safe_name)
+            with open(flat_path, "wb") as f:
+                f.write(file_bytes)
+                
+            rel_path = os.path.relpath(abs_path, STORAGE_BASE_DIR).replace("\\", "/")
+            return rel_path
+        except Exception:
+            cat = sanitize_folder_name(category_name)
+            sub = sanitize_folder_name(sub_category_name)
+            jr = sanitize_folder_name(job_ref)
+            return f"{cat}/{sub}/{jr}/Resumes/{safe_name}"
 
-        # Store as standard forward-slash relative path
-        rel_path = os.path.relpath(abs_path, STORAGE_BASE_DIR).replace("\\", "/")
-        return rel_path
     except Exception as e:
         st.error(f"Storage Save Error (Resume): {str(e)}")
         return None
@@ -164,15 +219,14 @@ def resolve_file_path(path_or_filename: str, category: str = None) -> str:
     if os.path.isabs(clean_input) and os.path.exists(clean_input):
         return clean_input
 
-    # 3. Check legacy flat category folders
-    if category:
-        cat_dir = RESUMES_DIR if "resume" in category.lower() else JOB_DOCS_DIR
-        flat_path = os.path.join(cat_dir, sanitize_filename(os.path.basename(clean_input)))
-        if os.path.exists(flat_path):
-            return flat_path
+    # 3. Check flat folders (resumes, job_documents, legacy_resumes)
+    target_name = os.path.basename(clean_input)
+    for folder in [RESUMES_DIR, JOB_DOCS_DIR, LEGACY_RESUMES_DIR]:
+        flat_p = os.path.join(folder, target_name)
+        if os.path.exists(flat_p):
+            return flat_p
 
     # 4. Search recursively for filename in STORAGE_BASE_DIR (safety net)
-    target_name = os.path.basename(clean_input)
     for root, _, files in os.walk(STORAGE_BASE_DIR):
         if target_name in files:
             return os.path.join(root, target_name)
@@ -181,22 +235,65 @@ def resolve_file_path(path_or_filename: str, category: str = None) -> str:
 
 
 def read_file_bytes(path_or_filename: str, category: str = None) -> bytes:
-    """Reads and returns file bytes from local storage given a relative path or filename."""
+    """
+    Reads and returns file bytes. 
+    First checks local disk / OneDrive. If not found (e.g. running on Cloud or unsynced PC),
+    automatically downloads directly from Supabase Cloud Storage.
+    """
+    if not path_or_filename:
+        return None
+        
+    # 1. Check Local / OneDrive
     abs_path = resolve_file_path(path_or_filename, category)
     if abs_path and os.path.exists(abs_path):
         try:
             with open(abs_path, "rb") as f:
                 return f.read()
-        except Exception as e:
-            st.error(f"Error reading file '{path_or_filename}': {str(e)}")
-            return None
+        except Exception:
+            pass
+
+    # 2. Hybrid Cloud Fallback: Download from Supabase Storage
+    target_name = os.path.basename(str(path_or_filename).strip())
+    
+    # Determine bucket
+    if "job_doc" in str(path_or_filename).lower() or (category and "job" in str(category).lower()):
+        bucket = "job_documents"
+    else:
+        bucket = "Resume"
+
+    try:
+        data = supabase.storage.from_(bucket).download(target_name)
+        if data:
+            # Cache locally if possible
+            try:
+                if abs_path:
+                    os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+                    with open(abs_path, "wb") as f:
+                        f.write(data)
+            except Exception:
+                pass
+            return data
+    except Exception:
+        # Fallback to alternative bucket
+        alt_bucket = "job_documents" if bucket == "Resume" else "Resume"
+        try:
+            data = supabase.storage.from_(alt_bucket).download(target_name)
+            if data:
+                return data
+        except Exception:
+            pass
+
     return None
 
 
 def file_exists(path_or_filename: str, category: str = None) -> bool:
-    """Checks if the file exists in storage."""
+    """Checks if the file exists locally or in Supabase cloud storage."""
+    if not path_or_filename:
+        return False
     abs_path = resolve_file_path(path_or_filename, category)
-    return bool(abs_path and os.path.exists(abs_path))
+    if abs_path and os.path.exists(abs_path):
+        return True
+    return bool(str(path_or_filename).strip())
 
 
 def get_mime_type(filename: str) -> str:
