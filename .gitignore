@@ -18,3 +18,9 @@ Thumbs.db
 # Virtual Environment
 .venv/
 venv/
+
+# Data Exports & Temporary files
+*.xlsx
+*.xls
+*.csv
+storage_data/

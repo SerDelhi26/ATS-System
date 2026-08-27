@@ -39,13 +39,13 @@ def get_secret(key: str, default: str = "") -> str:
 SUPABASE_URL = (
     get_secret("NEXT_PUBLIC_SUPABASE_URL")
     or get_secret("SUPABASE_URL")
-    or "https://jzaqymaxxlkoqjctcjjj.supabase.co"
+    or "https://ztxnpkzcftpgnkipvqrg.supabase.co"
 )
 SUPABASE_KEY = (
     get_secret("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY")
     or get_secret("SUPABASE_KEY")
     or get_secret("NEXT_PUBLIC_SUPABASE_ANON_KEY")
-    or "sb_publishable_EGdBt6jt5wKgwnxri5nvqw_EKj6Jkbh"
+    or "sb_publishable_XzS4PpHaNykCvX_jON_UTQ_N7TtYzxR"
 )
 
 _transport = SafeRetryTransport(
