@@ -15,7 +15,7 @@ except ImportError:
 load_dotenv()
 
 # ==============================================================================
-# MICROSOFT GRAPH ONEDRIVE CONFIGURATION
+# MICROSOFT GRAPH ONEDRIVE CONFIGURATION (1 TB CLOUD STORAGE)
 # ==============================================================================
 def get_secret_val(key: str, default: str = "") -> str:
     val = os.getenv(key)
@@ -73,7 +73,7 @@ def _get_storage_base_dir() -> str:
     """
     Single source of truth for the local/OneDrive storage root.
     Reads from environment variable ATS_STORAGE_DIR or LOCAL_STORAGE_PATH.
-    Defaults to C:/ATS_Storage (or project local ./storage_data).
+    Defaults to C:/Users/dell/Documents/OneDrive/Apps/ATS_Storage.
     """
     env_dir = get_secret_val("ATS_STORAGE_DIR") or get_secret_val("LOCAL_STORAGE_PATH")
     if env_dir and str(env_dir).strip():
@@ -86,7 +86,6 @@ def _get_storage_base_dir() -> str:
         os.makedirs(base, exist_ok=True)
         return os.path.abspath(base)
     except Exception:
-        # Fallback to local temporary storage if Windows path is not accessible (e.g. Streamlit Cloud Linux)
         fallback = os.path.join(os.path.dirname(os.path.abspath(__file__)), "storage_data")
         os.makedirs(fallback, exist_ok=True)
         return os.path.abspath(fallback)
@@ -156,13 +155,13 @@ def create_job_folder_structure(category_name: str, sub_category_name: str, job_
 
 
 def _upload_to_onedrive_cloud(rel_path: str, file_bytes: bytes) -> bool:
-    """Uploads file content directly to Admin OneDrive via Microsoft Graph API."""
+    """Uploads file content directly to Apps/ATS_Storage in Admin OneDrive via Microsoft Graph API."""
     token = get_onedrive_access_token()
     if not token:
         return False
     try:
         clean_path = rel_path.replace("\\", "/").strip("/")
-        url = f"https://graph.microsoft.com/v1.0/me/drive/root:/ATS_Storage/{clean_path}:/content"
+        url = f"https://graph.microsoft.com/v1.0/me/drive/root:/Apps/ATS_Storage/{clean_path}:/content"
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": get_mime_type(clean_path)
@@ -174,13 +173,13 @@ def _upload_to_onedrive_cloud(rel_path: str, file_bytes: bytes) -> bool:
 
 
 def _download_from_onedrive_cloud(rel_path: str) -> bytes:
-    """Downloads file content directly from Admin OneDrive via Microsoft Graph API."""
+    """Downloads file content directly from Apps/ATS_Storage in Admin OneDrive via Microsoft Graph API."""
     token = get_onedrive_access_token()
     if not token:
         return None
     try:
         clean_path = rel_path.replace("\\", "/").strip("/")
-        url = f"https://graph.microsoft.com/v1.0/me/drive/root:/ATS_Storage/{clean_path}:/content"
+        url = f"https://graph.microsoft.com/v1.0/me/drive/root:/Apps/ATS_Storage/{clean_path}:/content"
         headers = {"Authorization": f"Bearer {token}"}
         res = requests.get(url, headers=headers, timeout=30)
         if res.status_code == 200:
@@ -192,7 +191,7 @@ def _download_from_onedrive_cloud(rel_path: str) -> bytes:
 
 def save_job_document(uploaded_file, category_name: str, sub_category_name: str, job_ref: str, custom_name: str = None) -> str:
     """
-    Saves a Job Document directly to Admin OneDrive Cloud (1 TB) and local storage.
+    Saves a Job Document directly to Admin OneDrive Cloud (Apps/ATS_Storage) and local storage.
     Returns the relative path for database storage.
     """
     if uploaded_file is None:
@@ -212,7 +211,7 @@ def save_job_document(uploaded_file, category_name: str, sub_category_name: str,
         jr = sanitize_folder_name(job_ref)
         rel_path = f"{cat}/{sub}/{jr}/Job_Documents/{safe_name}"
 
-        # 1. Upload to Admin OneDrive Cloud (1 TB Storage)
+        # 1. Upload to Admin OneDrive Cloud at Apps/ATS_Storage (1 TB Storage)
         _upload_to_onedrive_cloud(rel_path, file_bytes)
 
         # 2. Upload to Supabase Storage Backup
@@ -241,7 +240,7 @@ def save_job_document(uploaded_file, category_name: str, sub_category_name: str,
 
 def save_candidate_resume(uploaded_file, category_name: str, sub_category_name: str, job_ref: str, custom_name: str = None) -> str:
     """
-    Saves a Candidate Resume directly to Admin OneDrive Cloud (1 TB) and local storage.
+    Saves a Candidate Resume directly to Admin OneDrive Cloud (Apps/ATS_Storage) and local storage.
     Returns the relative path for database storage.
     """
     if uploaded_file is None:
@@ -261,7 +260,7 @@ def save_candidate_resume(uploaded_file, category_name: str, sub_category_name: 
         jr = sanitize_folder_name(job_ref)
         rel_path = f"{cat}/{sub}/{jr}/Resumes/{safe_name}"
 
-        # 1. Upload to Admin OneDrive Cloud (1 TB Storage)
+        # 1. Upload to Admin OneDrive Cloud at Apps/ATS_Storage (1 TB Storage)
         _upload_to_onedrive_cloud(rel_path, file_bytes)
 
         # 2. Upload to Supabase Storage Backup
@@ -325,8 +324,8 @@ def resolve_file_path(path_or_filename: str, category: str = None) -> str:
 def read_file_bytes(path_or_filename: str, category: str = None) -> bytes:
     """
     Reads and returns file bytes:
-    1. Checks local disk / OneDrive folder.
-    2. If not found locally (Streamlit Cloud or non-synced machine), downloads directly from Admin OneDrive Cloud.
+    1. Checks local disk / OneDrive folder (C:/Users/dell/Documents/OneDrive/Apps/ATS_Storage).
+    2. If not found locally (Streamlit Cloud or non-synced machine), downloads directly from Admin OneDrive Cloud (Apps/ATS_Storage).
     3. Fallback to Supabase Cloud Storage.
     """
     if not path_or_filename:
@@ -341,7 +340,7 @@ def read_file_bytes(path_or_filename: str, category: str = None) -> bytes:
         except Exception:
             pass
 
-    # 2. Download from Admin OneDrive Cloud (1 TB Storage)
+    # 2. Download from Admin OneDrive Cloud at Apps/ATS_Storage (1 TB Storage)
     clean_rel = str(path_or_filename).replace("\\", "/").strip("/")
     data = _download_from_onedrive_cloud(clean_rel)
     if not data:
