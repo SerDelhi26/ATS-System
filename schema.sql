@@ -95,7 +95,7 @@ CREATE TABLE IF NOT EXISTS public.candidate_management (
     first_name TEXT NOT NULL,
     last_name TEXT NOT NULL,
     gender TEXT DEFAULT 'Not Specified',
-    approx_age INT,
+    approx_dob DATE,
     email TEXT,
     mobile_no TEXT,
     alternate_mobile TEXT,
@@ -225,7 +225,7 @@ CREATE TABLE IF NOT EXISTS public.legacy_candidates (
     first_name TEXT NOT NULL,
     last_name TEXT,
     gender TEXT DEFAULT 'Not Specified',
-    approx_age INT,
+    approx_dob DATE,
     email TEXT,
     mobile_no TEXT,
     alternate_mobile TEXT,
@@ -319,5 +319,38 @@ BEGIN
         CREATE POLICY "Allow public delete talent_mapping" ON public.talent_mapping FOR DELETE TO public USING (true);
     END IF;
 END $$;
+
+-- ====================================================================
+-- 10. MIGRATION: DYNAMIC CANDIDATE AGE (approx_dob)
+-- Run this in your Supabase SQL Editor to migrate existing databases
+-- ====================================================================
+ALTER TABLE public.candidate_management ADD COLUMN IF NOT EXISTS approx_dob DATE;
+ALTER TABLE public.legacy_candidates ADD COLUMN IF NOT EXISTS approx_dob DATE;
+
+-- Backfill approx_dob from existing approx_age and creation year
+UPDATE public.candidate_management 
+SET approx_dob = TO_DATE(
+    (EXTRACT(YEAR FROM COALESCE(created_on, NOW())) - COALESCE(approx_age, 25))::TEXT || '-01-01', 
+    'YYYY-MM-DD'
+)
+WHERE approx_dob IS NULL;
+
+-- Optional: Drop legacy approx_age column once approx_dob is verified
+ALTER TABLE public.candidate_management DROP COLUMN IF EXISTS approx_age;
+ALTER TABLE public.legacy_candidates DROP COLUMN IF EXISTS approx_age;
+
+-- Format legacy candidates reference numbers to 6-digit zero-padded format (LEG-000001 up to LEG-150000)
+UPDATE public.legacy_candidates
+SET candidate_reference_no = 'LEG-' || LPAD(
+    COALESCE(
+        NULLIF(REGEXP_REPLACE(candidate_reference_no, '\D', '', 'g'), ''),
+        legacy_candidate_id::TEXT
+    ),
+    6,
+    '0'
+);
+
+
+
 
 

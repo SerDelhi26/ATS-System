@@ -97,7 +97,7 @@ def get_all_candidates_for_matching():
             supabase
             .table("candidate_management")
             .select(
-                "candidate_id, candidate_reference_no, first_name, last_name, gender, approx_age, email, mobile_no, current_company, current_designation, skills, experience_years, experience_months, current_ctc, expected_ctc, current_location, candidate_status, current_stage, resume_path, job_id, created_by_name, created_by_user_id, created_on, remarks"
+                "candidate_id, candidate_reference_no, first_name, last_name, gender, approx_dob, email, mobile_no, current_company, current_designation, skills, experience_years, experience_months, current_ctc, expected_ctc, current_location, candidate_status, current_stage, resume_path, job_id, created_by_name, created_by_user_id, created_on, remarks"
             )
             .order("candidate_id", desc=True)
             .limit(2000)
@@ -118,7 +118,7 @@ def get_all_candidates_for_matching():
             supabase
             .table("legacy_candidates")
             .select(
-                "legacy_candidate_id, candidate_reference_no, first_name, last_name, gender, approx_age, email, mobile_no, current_company, current_designation, skills, experience_years, experience_months, current_ctc, expected_ctc, current_location, notice_period, notice_negotiable, qualification, education_details, resume_name, resume_path, is_migrated_to_active, migrated_candidate_id"
+                "legacy_candidate_id, candidate_reference_no, first_name, last_name, gender, approx_dob, email, mobile_no, current_company, current_designation, skills, experience_years, experience_months, current_ctc, expected_ctc, current_location, notice_period, notice_negotiable, qualification, education_details, resume_name, resume_path, is_migrated_to_active, migrated_candidate_id"
             )
             .order("legacy_candidate_id", desc=False)
             .limit(3000)

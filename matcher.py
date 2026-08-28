@@ -236,15 +236,24 @@ def calculate_candidate_match(
     base_total_exp = round(cand_base_years + (cand_base_months / 12.0), 1)
     dynamic_exp = round(base_total_exp + elapsed_years, 1)
 
-    # Dynamic Age Calculation
-    base_age = candidate.get("approx_age")
-    if base_age:
-        try:
-            dynamic_age = int(round(float(base_age) + elapsed_years))
-        except Exception:
+    # Dynamic Age Calculation (Real-time from approx_dob or DOB)
+    dob_str = candidate.get("approx_dob") or candidate.get("date_of_birth")
+    dynamic_age = None
+    if dob_str:
+        cand_dob = parse_date_safely(dob_str)
+        if cand_dob:
+            today = date.today()
+            dynamic_age = today.year - cand_dob.year - ((today.month, today.day) < (cand_dob.month, cand_dob.day))
+
+    if dynamic_age is None:
+        base_age = candidate.get("approx_age")
+        if base_age:
+            try:
+                dynamic_age = int(round(float(base_age) + elapsed_years))
+            except Exception:
+                dynamic_age = int(round(22 + dynamic_exp))
+        else:
             dynamic_age = int(round(22 + dynamic_exp))
-    else:
-        dynamic_age = int(round(22 + dynamic_exp))
 
     is_high_seniority = (dynamic_exp >= 38.0) or (dynamic_age >= 58)
 

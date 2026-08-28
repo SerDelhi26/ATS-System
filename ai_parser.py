@@ -3,7 +3,7 @@ import re
 import io
 import json
 import base64
-from datetime import datetime
+from datetime import datetime, date
 import requests
 from dotenv import load_dotenv
 import streamlit as st
@@ -145,36 +145,94 @@ def extract_text_from_docx(file_bytes: bytes) -> str:
         return ""
 
 
-def compute_approx_age(parsed: dict) -> int:
+def normalize_dob(dob_raw) -> str:
+    """Attempts to parse varied date strings into YYYY-MM-DD."""
+    if not dob_raw:
+        return ""
+    dob_str = str(dob_raw).strip()
+    if not dob_str or dob_str.lower() in ["none", "null", "n/a", "0"]:
+        return ""
+    
+    formats = [
+        "%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%m/%d/%Y",
+        "%d %b %Y", "%d %B %Y", "%b %d %Y", "%B %d %Y",
+        "%d-%b-%Y", "%d-%B-%Y", "%Y/%m/%d"
+    ]
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(dob_str, fmt)
+            curr_year = datetime.now().year
+            if 1940 <= dt.year <= curr_year:
+                return dt.strftime("%Y-%m-%d")
+        except Exception:
+            pass
+    
+    match = re.search(r'\b(19\d\d|20\d\d)\b', dob_str)
+    if match:
+        year = int(match.group(1))
+        curr_year = datetime.now().year
+        if 1940 <= year <= curr_year:
+            return f"{year}-01-01"
+            
+    return ""
+
+
+def compute_approx_dob(parsed: dict) -> str:
     """
-    Computes candidate approximate age based on 10th, 12th, Graduation, PG years,
-    or total experience fallback (Benchmark year 2026).
+    Computes candidate approx_dob (YYYY-MM-DD).
+    If exact date_of_birth is present on resume, standardizes and returns it.
+    Otherwise, determines birth year from 10th (-15), 12th (-17), Graduation (-22), PG (-24),
+    or fallback via total experience, returning f"{inferred_year}-01-01".
     """
+    # 1. Check explicit date_of_birth from resume
+    raw_dob = parsed.get("date_of_birth") or parsed.get("dob")
+    norm_dob = normalize_dob(raw_dob)
+    if norm_dob:
+        return norm_dob
+        
     curr_year = datetime.now().year
     
-    # 1. Check 10th / SSC year (completed at age ~15)
+    # 2. Check 10th / SSC year (completed at age ~15)
     tenth = int(parsed.get("tenth_passing_year", 0) or 0)
     if 1950 <= tenth <= curr_year:
-        return max(18, min(80, (curr_year - tenth) + 15))
+        inferred_year = max(1945, min(curr_year - 15, tenth - 15))
+        return f"{inferred_year}-01-01"
         
-    # 2. Check 12th / HSC year (completed at age ~17)
+    # 3. Check 12th / HSC year (completed at age ~17)
     twelfth = int(parsed.get("twelfth_passing_year", 0) or 0)
     if 1950 <= twelfth <= curr_year:
-        return max(18, min(80, (curr_year - twelfth) + 17))
+        inferred_year = max(1945, min(curr_year - 17, twelfth - 17))
+        return f"{inferred_year}-01-01"
         
-    # 3. Check Graduation year (completed at age ~21-22)
+    # 4. Check Graduation year (completed at age ~21-22)
     grad = int(parsed.get("graduation_year", 0) or 0)
     if 1950 <= grad <= curr_year:
-        return max(18, min(80, (curr_year - grad) + 22))
+        inferred_year = max(1945, min(curr_year - 20, grad - 22))
+        return f"{inferred_year}-01-01"
         
-    # 4. Check PG year (completed at age ~24)
+    # 5. Check PG year (completed at age ~24)
     pg = int(parsed.get("pg_passing_year", 0) or 0)
     if 1950 <= pg <= curr_year:
-        return max(21, min(80, (curr_year - pg) + 24))
+        inferred_year = max(1945, min(curr_year - 22, pg - 24))
+        return f"{inferred_year}-01-01"
         
-    # 5. Fallback via total experience (Career started at approx age 22)
+    # 6. Fallback via total experience (Career started at approx age 22)
     exp_y = int(parsed.get("experience_years", 0) or 0)
-    return max(20, min(80, 22 + exp_y))
+    inferred_year = max(1945, min(curr_year - 18, curr_year - (22 + exp_y)))
+    return f"{inferred_year}-01-01"
+
+
+def compute_approx_age(parsed: dict) -> int:
+    """
+    Computes candidate dynamic age based on approx_dob.
+    """
+    dob_str = compute_approx_dob(parsed)
+    try:
+        dt = datetime.strptime(dob_str, "%Y-%m-%d").date()
+        today = date.today()
+        return today.year - dt.year - ((today.month, today.day) < (dt.month, dt.day))
+    except Exception:
+        return 25
 
 
 def sanitize_parsed_output(parsed: dict) -> dict:
@@ -183,11 +241,13 @@ def sanitize_parsed_output(parsed: dict) -> dict:
     if raw_gender not in ["Male", "Female", "Other"]:
         raw_gender = "Not Specified"
 
+    approx_dob = compute_approx_dob(parsed)
+
     return {
         "first_name": str(parsed.get("first_name", "")).strip(),
         "last_name": str(parsed.get("last_name", "")).strip(),
         "gender": raw_gender,
-        "approx_age": compute_approx_age(parsed),
+        "approx_dob": approx_dob,
         "email": str(parsed.get("email", "")).strip().lower(),
         "mobile_no": clean_phone(parsed.get("mobile_no", "")),
         "alternate_mobile": clean_phone(parsed.get("alternate_mobile", "")),
@@ -332,6 +392,7 @@ Extract candidate information from the resume into this exact JSON structure:
   "first_name": "Candidate's First name",
   "last_name": "Candidate's Last name (or empty string if none)",
   "gender": "Male, Female, Other, or Not Specified (inferred from salutations like Mr./Ms., pronouns, or explicitly stated personal details)",
+  "date_of_birth": "Explicit Date of Birth if mentioned on resume (e.g. YYYY-MM-DD or DD/MM/YYYY or DD-Mon-YYYY) or empty string if not mentioned",
   "tenth_passing_year": 0,
   "twelfth_passing_year": 0,
   "graduation_year": 0,
@@ -353,11 +414,12 @@ Extract candidate information from the resume into this exact JSON structure:
 
 Important Rules:
 1. Extract first and last names cleanly (remove titles like Mr., Ms., Dr.).
-2. Extract 4-digit passing years for 10th (SSC), 12th (HSC), Graduation, or PG if mentioned in education history.
-3. Determine gender accurately from salutations (Mr. -> Male, Ms./Mrs. -> Female) or resume personal section. If unknown, set "Not Specified".
-4. Calculate total professional experience accurately in full years (integer) and remaining months (0-11 integer).
-5. If CTC is not explicitly stated, return 0.0.
-6. Output valid JSON only.
+2. Extract explicit Date of Birth (DOB) if present in personal details / biodata section.
+3. Extract 4-digit passing years for 10th (SSC), 12th (HSC), Graduation, or PG if mentioned in education history.
+4. Determine gender accurately from salutations (Mr. -> Male, Ms./Mrs. -> Female) or resume personal section. If unknown, set "Not Specified".
+5. Calculate total professional experience accurately in full years (integer) and remaining months (0-11 integer).
+6. If CTC is not explicitly stated, return 0.0.
+7. Output valid JSON only.
 """
 
     ext = os.path.splitext(filename or "")[1].lower()

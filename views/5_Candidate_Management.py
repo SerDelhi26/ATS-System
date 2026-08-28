@@ -294,7 +294,7 @@ def map_legacy_candidate_to_job(candidate_entry, job_id):
             "first_name": candidate_entry.get("first_name", "Candidate"),
             "last_name": candidate_entry.get("last_name", "") or "",
             "gender": candidate_entry.get("gender", "Not Specified"),
-            "approx_age": candidate_entry.get("approx_age"),
+            "approx_dob": candidate_entry.get("approx_dob"),
             "email": candidate_entry.get("email"),
             "mobile_no": candidate_entry.get("mobile_no"),
             "current_location": candidate_entry.get("current_location"),
@@ -634,6 +634,34 @@ with left_col:
             value=get_val("email", ""),
             key=get_key("email")
         )
+
+    col_dob1, col_dob2 = st.columns(2)
+    with col_dob1:
+        raw_dob = get_val("approx_dob") or get_val("date_of_birth") or ""
+        parsed_dob = None
+        if raw_dob:
+            try:
+                parsed_dob = datetime.strptime(str(raw_dob).strip(), "%Y-%m-%d").date()
+            except Exception:
+                pass
+
+        dob_val = st.date_input(
+            "Date of Birth (DOB) *",
+            value=parsed_dob if parsed_dob else date(1995, 1, 1),
+            min_value=date(1940, 1, 1),
+            max_value=date.today(),
+            help="Exact DOB from resume, or inferred as Jan 1 of estimated birth year",
+            key=get_key("approx_dob")
+        )
+
+    with col_dob2:
+        if dob_val:
+            today = date.today()
+            calc_live_age = today.year - dob_val.year - ((today.month, today.day) < (dob_val.month, dob_val.day))
+            st.markdown(
+                f"<div style='margin-top:28px; padding:7px 12px; background:rgba(37,99,235,0.08); border:1px solid rgba(37,99,235,0.25); border-radius:8px; font-size:13px; font-weight:600; color:#1d4ed8;'>🎂 Computed Dynamic Age: <span style='font-size:15px; font-weight:700;'>{calc_live_age} Yrs</span> (DOB: {dob_val.strftime('%d %b %Y')})</div>",
+                unsafe_allow_html=True
+            )
 
     col1, col2 = st.columns(2)
 
@@ -1270,14 +1298,13 @@ with left_col:
             # SAVE DATA
             # ==========================
 
-            calc_age = parsed.get("approx_age") if isinstance(parsed, dict) else None
-            if not calc_age and editing and candidate:
-                calc_age = candidate.get("approx_age")
+            final_dob_str = dob_val.strftime("%Y-%m-%d") if dob_val else None
+            calc_age = None
+            if dob_val:
+                today = date.today()
+                calc_age = today.year - dob_val.year - ((today.month, today.day) < (dob_val.month, dob_val.day))
             if not calc_age:
-                try:
-                    calc_age = max(18, int(22 + (float(experience_years) if experience_years != "-- Select --" else 0)))
-                except Exception:
-                    calc_age = 25
+                calc_age = 25
 
             candidate_data = {
 
@@ -1293,8 +1320,8 @@ with left_col:
                 "gender":
                     gender,
 
-                "approx_age":
-                    int(calc_age),
+                "approx_dob":
+                    final_dob_str,
 
                 "email":
                     email.strip().lower(),
@@ -1547,6 +1574,7 @@ with right_col:
                 first_name,
                 last_name,
                 gender,
+                approx_dob,
                 mobile_no,
                 email,
                 current_company,
@@ -1881,7 +1909,7 @@ with right_col:
                 leg_g = lc.get("gender") or "Not Specified"
                 g_icon = "👨" if leg_g == "Male" else ("👩" if leg_g == "Female" else "⚧")
 
-                cols[0].write(lc.get("candidate_reference_no", f"LEG-{lc['legacy_candidate_id']}"))
+                cols[0].write(lc.get("candidate_reference_no") or f"LEG-{lc['legacy_candidate_id']:06d}")
                 cols[1].write(full_name)
                 cols[2].write(f"{g_icon} {leg_g}")
                 cols[3].write(lc.get("current_company", "-"))
