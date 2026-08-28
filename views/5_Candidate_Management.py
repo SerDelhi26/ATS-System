@@ -635,34 +635,6 @@ with left_col:
             key=get_key("email")
         )
 
-    col_dob1, col_dob2 = st.columns(2)
-    with col_dob1:
-        raw_dob = get_val("approx_dob") or get_val("date_of_birth") or ""
-        parsed_dob = None
-        if raw_dob:
-            try:
-                parsed_dob = datetime.strptime(str(raw_dob).strip(), "%Y-%m-%d").date()
-            except Exception:
-                pass
-
-        dob_val = st.date_input(
-            "Date of Birth (DOB) *",
-            value=parsed_dob if parsed_dob else date(1995, 1, 1),
-            min_value=date(1940, 1, 1),
-            max_value=date.today(),
-            help="Exact DOB from resume, or inferred as Jan 1 of estimated birth year",
-            key=get_key("approx_dob")
-        )
-
-    with col_dob2:
-        if dob_val:
-            today = date.today()
-            calc_live_age = today.year - dob_val.year - ((today.month, today.day) < (dob_val.month, dob_val.day))
-            st.markdown(
-                f"<div style='margin-top:28px; padding:7px 12px; background:rgba(37,99,235,0.08); border:1px solid rgba(37,99,235,0.25); border-radius:8px; font-size:13px; font-weight:600; color:#1d4ed8;'>🎂 Computed Dynamic Age: <span style='font-size:15px; font-weight:700;'>{calc_live_age} Yrs</span> (DOB: {dob_val.strftime('%d %b %Y')})</div>",
-                unsafe_allow_html=True
-            )
-
     col1, col2 = st.columns(2)
 
     with col1:
@@ -1298,13 +1270,17 @@ with left_col:
             # SAVE DATA
             # ==========================
 
-            final_dob_str = dob_val.strftime("%Y-%m-%d") if dob_val else None
-            calc_age = None
-            if dob_val:
-                today = date.today()
-                calc_age = today.year - dob_val.year - ((today.month, today.day) < (dob_val.month, dob_val.day))
-            if not calc_age:
-                calc_age = 25
+            final_dob_str = parsed.get("approx_dob") if isinstance(parsed, dict) and parsed.get("approx_dob") else None
+            if not final_dob_str and editing and candidate:
+                final_dob_str = candidate.get("approx_dob")
+            if not final_dob_str:
+                curr_y = datetime.now().year
+                try:
+                    exp_val = float(experience_years) if experience_years != "-- Select --" else 0.0
+                except Exception:
+                    exp_val = 0.0
+                inferred_birth_y = max(1945, min(curr_y - 18, int(curr_y - (22 + exp_val))))
+                final_dob_str = f"{inferred_birth_y}-01-01"
 
             candidate_data = {
 
