@@ -44,7 +44,7 @@ def show_logout():
         st.session_state.clear()
         st.rerun()
 
-@st.cache_data(ttl=20)
+@st.cache_data(ttl=60)
 def get_recruiter_notification_data(user_id):
     """Cached helper to fetch assigned open jobs, candidate submissions, and lookups for notifications."""
     assignments = supabase.table("job_assignment").select("job_id").eq("user_id", user_id).execute().data or []
@@ -266,4 +266,4 @@ def fetch_all_from_table(table_name: str, select_fields: str = "*", order_by: st
         except Exception:
             break
     return all_data
-
+

@@ -57,32 +57,32 @@ if st.session_state.get("success_message"):
 # FUNCTIONS
 # ==========================
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=300)
 def get_job_titles():
     return supabase.table("job_title_master").select("*").execute().data
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=300)
 def get_companies():
     return supabase.table("company_master").select("*").execute().data
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=300)
 def get_categories():
     return supabase.table("category_master").select("*").execute().data
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=300)
 def get_sub_categories(category_id):
     return supabase.table("sub_category_master").select("*").eq("category_id", category_id).execute().data
 
 # NEW: Fetch all subcategories for the global filter lookup
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=300)
 def get_all_sub_categories():
     return supabase.table("sub_category_master").select("*").execute().data
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=300)
 def get_recruiters():
     return supabase.table("users").select("*").eq("role", "Recruiter").eq("status", "Active").execute().data
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=300)
 def get_all_candidates_for_matching():
     """
     Fetches both Live active candidates from candidate_management 
@@ -131,6 +131,120 @@ def get_all_candidates_for_matching():
         pass
 
     return all_pool
+
+@st.cache_data(ttl=60)
+def get_cached_job_assignments():
+    return supabase.table("job_assignment").select("*").execute().data or []
+
+@st.cache_data(ttl=60)
+def get_cached_jobs_data(is_admin, user_id):
+    select_query = """
+        job_id, job_reference_no, job_title_id, company_id, category_id, sub_category_id, location, openings, job_status, job_document_path,
+        experience_min_year, experience_max_year, pay_min, pay_max, currency, skills_required, job_description
+    """
+    if is_admin:
+        return fetch_all_from_table("job_management", select_fields=select_query, order_by="job_id", desc=True)
+    else:
+        assignments = supabase.table("job_assignment").select("job_id").eq("user_id", user_id).execute().data or []
+        my_job_ids = [a["job_id"] for a in assignments]
+        if my_job_ids:
+            res = (
+                supabase.table("job_management")
+                .select(select_query)
+                .in_("job_id", my_job_ids)
+                .eq("job_status", "Open")
+                .order("job_id", desc=True)
+                .execute()
+            )
+            return res.data or []
+        return []
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_inline_top_matches_cached(job_dict, pool_type, limit=10, min_score=35, exp_leeway=1, budget_stretch=15):
+    all_cands = get_all_candidates_for_matching()
+    if pool_type == "Live Only":
+        pool_cands = [c for c in all_cands if not c.get("is_legacy", False)]
+    elif pool_type == "Legacy Only":
+        pool_cands = [c for c in all_cands if c.get("is_legacy", False)]
+    else:
+        pool_cands = all_cands
+
+    return get_top_matched_candidates(
+        job_dict,
+        pool_cands,
+        limit=limit,
+        min_score=min_score,
+        exp_leeway_years=exp_leeway,
+        budget_stretch_pct=budget_stretch
+    )
+
+@st.cache_data(ttl=60)
+def get_cached_open_jobs(is_admin, user_id):
+    open_jobs = supabase.table("job_management").select("job_id, job_reference_no, job_title_id, company_id, location, skills_required, experience_min_year, experience_max_year, pay_min, pay_max, currency").eq("job_status", "Open").order("job_id", desc=True).execute().data or []
+    if not is_admin:
+        assignments = get_cached_job_assignments()
+        my_job_ids = {a["job_id"] for a in assignments if a["user_id"] == user_id}
+        open_jobs = [j for j in open_jobs if j["job_id"] in my_job_ids]
+    return open_jobs
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_global_ranked_matches_cached(
+    selected_job_id,
+    selected_job_dict,
+    pool_filter,
+    gender_filter,
+    stage_filter,
+    min_threshold,
+    exp_min,
+    exp_max,
+    exp_leeway,
+    budget_stretch,
+    skills_boost,
+    ranking_preference,
+    recency_choice
+):
+    all_cands = get_all_candidates_for_matching()
+
+    filtered_cands = all_cands
+    if pool_filter == "Live Pool Only":
+        filtered_cands = [c for c in filtered_cands if not c.get("is_legacy", False)]
+    elif pool_filter == "Legacy Archive Only":
+        filtered_cands = [c for c in filtered_cands if c.get("is_legacy", False)]
+
+    if gender_filter == "👩 Female Only":
+        filtered_cands = [c for c in filtered_cands if str(c.get("gender") or "").strip().lower() == "female"]
+    elif gender_filter == "👨 Male Only":
+        filtered_cands = [c for c in filtered_cands if str(c.get("gender") or "").strip().lower() == "male"]
+    elif gender_filter == "Other / Not Specified":
+        filtered_cands = [c for c in filtered_cands if str(c.get("gender") or "").strip().lower() not in ["male", "female"]]
+
+    if stage_filter == "Deactivated / Inactive Only":
+        filtered_cands = [c for c in filtered_cands if (c.get("candidate_status") or "") in ["Retired", "Deceased", "Inactive / Left Market", "Blacklisted"] or (c.get("current_stage") or "") in ["Retired", "Deceased", "Inactive / Left Market", "Blacklisted"]]
+    elif stage_filter != "All Active Stages":
+        filtered_cands = [c for c in filtered_cands if c.get("current_stage") == stage_filter or c.get("candidate_status") == stage_filter]
+
+    recency_map = {
+        "Active / Added within Last 1 Year": 1.0,
+        "Active / Added within Last 3 Years": 3.0,
+        "Active / Added within Last 5 Years": 5.0,
+        "All Time Archive (500K+ Scale)": None
+    }
+    recency_val = recency_map.get(recency_choice)
+
+    return get_top_matched_candidates(
+        selected_job_dict,
+        filtered_cands,
+        limit=None,
+        min_score=min_threshold,
+        exp_min_override=exp_min,
+        exp_max_override=exp_max,
+        exp_leeway_years=exp_leeway,
+        budget_stretch_pct=budget_stretch,
+        skills_boost=skills_boost,
+        ranking_preference=ranking_preference,
+        recency_years=recency_val,
+        include_inactive=(stage_filter == "Deactivated / Inactive Only")
+    )
 
 def map_candidate_to_job(candidate_entry, job_id):
     """
@@ -865,35 +979,9 @@ with right_col:
                 
             status_filter = "Open"  # Hardcoded backend logic for recruiters
 
-        assignments = supabase.table("job_assignment").select("*").execute()
-        assignments_data = assignments.data
-
-        select_query = """
-            job_id, job_reference_no, job_title_id, company_id, category_id, sub_category_id, location, openings, job_status, job_document_path,
-            experience_min_year, experience_max_year, pay_min, pay_max, currency, skills_required, job_description
-        """
-        
-        if is_admin:
-            all_jobs_data = fetch_all_from_table("job_management", select_fields=select_query, order_by="job_id", desc=True)
-            class DummyResp: data = all_jobs_data
-            jobs = DummyResp()
-        else:
-            my_assignments = supabase.table("job_assignment").select("job_id").eq("user_id", st.session_state.user_id).execute().data
-            my_job_ids = [a["job_id"] for a in my_assignments]
-            if my_job_ids:
-                jobs = (
-                    supabase.table("job_management")
-                    .select(select_query)
-                    .in_("job_id", my_job_ids)
-                    .eq("job_status", "Open")
-                    .order("job_id", desc=True)
-                    .execute()
-                )
-            else:
-                class DummyResp: data = []
-                jobs = DummyResp()
-
-        jobs_df = pd.DataFrame(jobs.data)
+        assignments_data = get_cached_job_assignments()
+        all_jobs_list = get_cached_jobs_data(is_admin, st.session_state.get("user_id"))
+        jobs_df = pd.DataFrame(all_jobs_list)
 
         # Apply Search & Dropdown Filters
         if not jobs_df.empty and search_text:
@@ -1012,19 +1100,13 @@ with right_col:
                         with q_col3:
                             inl_pool = st.selectbox("👥 Pool", ["All (Live + Legacy)", "Live Only", "Legacy Only"], key=f"inl_pool_{row['job_id']}")
 
-                        pool_cands = all_candidates_db
-                        if inl_pool == "Live Only":
-                            pool_cands = [c for c in pool_cands if not c.get("is_legacy", False)]
-                        elif inl_pool == "Legacy Only":
-                            pool_cands = [c for c in pool_cands if c.get("is_legacy", False)]
-
-                        top_matches = get_top_matched_candidates(
+                        top_matches = get_inline_top_matches_cached(
                             job_dict,
-                            pool_cands,
+                            inl_pool,
                             limit=10,
                             min_score=35,
-                            exp_leeway_years=inl_leeway,
-                            budget_stretch_pct=inl_stretch
+                            exp_leeway=inl_leeway,
+                            budget_stretch=inl_stretch
                         )
                         
                         if top_matches:
@@ -1096,13 +1178,7 @@ with right_col:
         st.markdown("### 🎯 Smart Candidate Suggestion Engine")
         st.caption("Automatically ranks candidates from your entire database (Live Candidates + Legacy Archive) against any job with customizable Experience and Budget flexibility.")
         
-        open_jobs_list = supabase.table("job_management").select("job_id, job_reference_no, job_title_id, company_id, location, skills_required, experience_min_year, experience_max_year, pay_min, pay_max, currency").eq("job_status", "Open").execute().data
-        
-        # If recruiter, filter to assigned jobs
-        if not is_admin:
-            my_assignments = supabase.table("job_assignment").select("job_id").eq("user_id", st.session_state.user_id).execute().data
-            my_job_ids = [a["job_id"] for a in my_assignments]
-            open_jobs_list = [j for j in open_jobs_list if j["job_id"] in my_job_ids]
+        open_jobs_list = get_cached_open_jobs(is_admin, st.session_state.get("user_id"))
             
         if not open_jobs_list:
             st.warning("No open jobs available to match candidates against.")
@@ -1210,46 +1286,21 @@ with right_col:
                 gender_matcher_filter = st.selectbox("Gender Diversity Filter", ["All Genders", "👩 Female Only", "👨 Male Only", "Other / Not Specified"])
             with f_col4:
                 stage_filter = st.selectbox("Filter by Candidate Stage", ["All Active Stages", "New", "Screening", "Shortlisted", "Applied", "Selected", "Deactivated / Inactive Only"])
-                
-            filtered_cands = all_candidates_db
-            if pool_filter == "Live Pool Only":
-                filtered_cands = [c for c in filtered_cands if not c.get("is_legacy", False)]
-            elif pool_filter == "Legacy Archive Only":
-                filtered_cands = [c for c in filtered_cands if c.get("is_legacy", False)]
 
-            if gender_matcher_filter == "👩 Female Only":
-                filtered_cands = [c for c in filtered_cands if str(c.get("gender") or "").strip().lower() == "female"]
-            elif gender_matcher_filter == "👨 Male Only":
-                filtered_cands = [c for c in filtered_cands if str(c.get("gender") or "").strip().lower() == "male"]
-            elif gender_matcher_filter == "Other / Not Specified":
-                filtered_cands = [c for c in filtered_cands if str(c.get("gender") or "").strip().lower() not in ["male", "female"]]
-
-            if stage_filter == "Deactivated / Inactive Only":
-                filtered_cands = [c for c in filtered_cands if (c.get("candidate_status") or "") in ["Retired", "Deceased", "Inactive / Left Market", "Blacklisted"] or (c.get("current_stage") or "") in ["Retired", "Deceased", "Inactive / Left Market", "Blacklisted"]]
-            elif stage_filter != "All Active Stages":
-                filtered_cands = [c for c in filtered_cands if c.get("current_stage") == stage_filter or c.get("candidate_status") == stage_filter]
-
-            recency_map = {
-                "Active / Added within Last 1 Year": 1.0,
-                "Active / Added within Last 3 Years": 3.0,
-                "Active / Added within Last 5 Years": 5.0,
-                "All Time Archive (500K+ Scale)": None
-            }
-            recency_val = recency_map.get(recency_choice)
-
-            ranked_matches = get_top_matched_candidates(
+            ranked_matches = get_global_ranked_matches_cached(
+                selected_match_job["job_id"],
                 selected_match_job,
-                filtered_cands,
-                limit=None,
-                min_score=min_threshold,
-                exp_min_override=exp_range[0],
-                exp_max_override=exp_range[1],
-                exp_leeway_years=exp_leeway,
-                budget_stretch_pct=budget_stretch,
-                skills_boost=skills_boost,
-                ranking_preference=ranking_preference,
-                recency_years=recency_val,
-                include_inactive=(stage_filter == "Deactivated / Inactive Only")
+                pool_filter,
+                gender_matcher_filter,
+                stage_filter,
+                min_threshold,
+                exp_range[0],
+                exp_range[1],
+                exp_leeway,
+                budget_stretch,
+                skills_boost,
+                ranking_preference,
+                recency_choice
             )
             
             if ranked_matches:
