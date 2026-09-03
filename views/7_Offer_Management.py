@@ -1,6 +1,6 @@
 import streamlit as st
 from db import supabase
-from common import show_logout, show_job_notifications, show_user_profile, render_pagination
+from common import show_logout, show_job_notifications, show_user_profile, render_pagination, fetch_all_from_table
 from datetime import date, datetime
 from theme import apply_theme
 
@@ -762,20 +762,7 @@ with right_col:
     # OFFER DATA
     # --------------------------
 
-    # Limit the database query to 500 records to prevent RAM overload
-    result = (
-        supabase
-        .table("offer_management")
-        .select("*")
-        .order(
-            "offer_id",
-            desc=True
-        )
-        .limit(2000)
-        .execute()
-    )
-
-    offers = result.data
+    offers = fetch_all_from_table("offer_management", select_fields="*", order_by="offer_id", desc=True)
 
     # --------------------------
     # FILTERS

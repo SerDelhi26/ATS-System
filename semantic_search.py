@@ -5,27 +5,20 @@ from db import supabase
 from datetime import datetime, date
 from matcher import extract_skill_tokens, normalize_text, calculate_experience_match, calculate_budget_match, parse_date_safely
 from geo_distance import calculate_geo_proximity
+from common import fetch_all_legacy_candidates, fetch_all_live_candidates
 
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=30)
 def get_all_candidates_pool():
     """
     Fetches unified pool of active candidates and legacy archive candidates.
     Filters out deactivated, retired, deceased, or blacklisted profiles.
+    Uses paginated fetching to load 100% of candidates (5,000+).
     """
     inactive_statuses = {"retired", "deceased", "blacklisted", "inactive", "inactive / left market"}
     all_pool = []
     try:
-        live_data = (
-            supabase
-            .table("candidate_management")
-            .select(
-                "candidate_id, candidate_reference_no, first_name, last_name, email, mobile_no, alternate_mobile, current_company, current_designation, skills, experience_years, experience_months, current_ctc, expected_ctc, current_location, candidate_status, current_stage, resume_path, job_id, created_by_name, created_by_user_id, created_on, qualification, remarks"
-            )
-            .order("candidate_id", desc=True)
-            .limit(2000)
-            .execute()
-            .data or []
-        )
+        fields_live = "candidate_id, candidate_reference_no, first_name, last_name, email, mobile_no, alternate_mobile, current_company, current_designation, skills, experience_years, experience_months, current_ctc, expected_ctc, current_location, candidate_status, current_stage, resume_path, job_id, created_by_name, created_by_user_id, created_on, qualification, remarks"
+        live_data = fetch_all_live_candidates(fields_live)
         live_candidate_ids = set()
         for c in live_data:
             live_candidate_ids.add(c["candidate_id"])
@@ -40,17 +33,8 @@ def get_all_candidates_pool():
         pass
 
     try:
-        legacy_data = (
-            supabase
-            .table("legacy_candidates")
-            .select(
-                "legacy_candidate_id, candidate_reference_no, first_name, last_name, email, mobile_no, current_company, current_designation, skills, experience_years, experience_months, current_ctc, expected_ctc, current_location, notice_period, notice_negotiable, qualification, education_details, resume_name, resume_path, is_migrated_to_active, migrated_candidate_id"
-            )
-            .order("legacy_candidate_id", desc=False)
-            .limit(3000)
-            .execute()
-            .data or []
-        )
+        fields_legacy = "legacy_candidate_id, candidate_reference_no, first_name, last_name, email, mobile_no, current_company, current_designation, skills, experience_years, experience_months, current_ctc, expected_ctc, current_location, notice_period, notice_negotiable, qualification, education_details, resume_name, resume_path, is_migrated_to_active, migrated_candidate_id"
+        legacy_data = fetch_all_legacy_candidates(fields_legacy)
         for c in legacy_data:
             if c.get("is_migrated_to_active") and c.get("migrated_candidate_id") in live_candidate_ids:
                 continue

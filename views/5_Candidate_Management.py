@@ -4,7 +4,7 @@ import os
 import textwrap
 from datetime import datetime, date
 from db import supabase
-from common import show_logout, show_job_notifications, show_user_profile, render_pagination
+from common import show_logout, show_job_notifications, show_user_profile, render_pagination, fetch_all_legacy_candidates, fetch_all_live_candidates
 from theme import apply_theme
 import storage
 import ai_parser
@@ -1539,38 +1539,8 @@ with right_col:
                 recruiter_options.extend(sorted(list({user["full_name"] for user in users})))
                 recruiter_filter = st.selectbox("Recruiter", recruiter_options, key="cand_dir_rec_filter")
 
-        result = (
-            supabase
-            .table("candidate_management")
-            .select(
-                """
-                candidate_id,
-                job_id,
-                candidate_reference_no,
-                first_name,
-                last_name,
-                gender,
-                approx_dob,
-                mobile_no,
-                email,
-                current_company,
-                skills,
-                candidate_status,
-                current_stage,
-                created_by_name,
-                created_by_user_id,
-                experience_years,
-                experience_months,
-                resume_path,
-                remarks
-                """
-            )
-            .order("candidate_id", desc=True)
-            .limit(2000)
-            .execute()
-        )
-
-        candidates = result.data
+        fields_main = "candidate_id, candidate_reference_no, job_id, first_name, last_name, gender, approx_dob, mobile_no, email, current_company, skills, candidate_status, current_stage, created_by_name, created_by_user_id, experience_years, experience_months, resume_path, remarks"
+        candidates = fetch_all_live_candidates(fields_main)
         filtered_candidates = candidates
 
         if status_filter != "All Status":
@@ -1740,18 +1710,9 @@ with right_col:
         st.markdown("## 🏛️ Legacy & Deactivated Candidate Archive")
         st.caption("Search, filter, inspect, and manage historical candidate records, including active archive talent and deactivated profiles (Retired, Deceased, Inactive, Blacklisted).")
 
-        # 1. Fetch legacy candidates
-        leg_raw_data = (
-            supabase
-            .table("legacy_candidates")
-            .select(
-                "legacy_candidate_id, candidate_reference_no, first_name, last_name, gender, email, mobile_no, alternate_mobile, current_company, current_designation, experience_years, experience_months, current_ctc, expected_ctc, current_location, notice_period, notice_negotiable, skills, qualification, education_details, resume_name, resume_path, created_on, is_migrated_to_active, migrated_candidate_id"
-            )
-            .order("legacy_candidate_id", desc=False)
-            .limit(3000)
-            .execute()
-            .data or []
-        )
+        # 1. Fetch all legacy candidates via pagination
+        fields_leg = "legacy_candidate_id, candidate_reference_no, first_name, last_name, gender, email, mobile_no, alternate_mobile, current_company, current_designation, experience_years, experience_months, current_ctc, expected_ctc, current_location, notice_period, notice_negotiable, skills, qualification, education_details, resume_name, resume_path, created_on, is_migrated_to_active, migrated_candidate_id"
+        leg_raw_data = fetch_all_legacy_candidates(fields_leg)
 
         # Compute status for each legacy record
         for lc in leg_raw_data:
@@ -2135,15 +2096,7 @@ with right_col:
         st.markdown("### 🛡️ Candidate Duplicate Cleanup & Merge Assistant")
         st.caption("Automatically detects candidate profiles sharing the same Mobile Number or Email across different jobs, allowing you to merge them into a single unified record.")
 
-        all_cands_resp = (
-            supabase
-            .table("candidate_management")
-            .select("candidate_id, candidate_reference_no, first_name, last_name, email, mobile_no, alternate_mobile, current_company, current_designation, skills, experience_years, expected_ctc, current_location, current_stage, candidate_status, job_id, resume_path, created_on, created_by_name, remarks")
-            .order("candidate_id", desc=True)
-            .limit(2000)
-            .execute()
-            .data or []
-        )
+        all_cands_resp = fetch_all_live_candidates("candidate_id, candidate_reference_no, first_name, last_name, email, mobile_no, alternate_mobile, current_company, current_designation, skills, experience_years, expected_ctc, current_location, current_stage, candidate_status, job_id, resume_path, created_on, created_by_name, remarks")
 
         phone_groups = {}
         email_groups = {}

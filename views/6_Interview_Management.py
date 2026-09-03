@@ -1,6 +1,6 @@
 import streamlit as st
 from db import supabase
-from common import show_logout, show_job_notifications, show_user_profile, render_pagination
+from common import show_logout, show_job_notifications, show_user_profile, render_pagination, fetch_all_from_table
 from datetime import date, datetime
 from theme import apply_theme
 
@@ -836,20 +836,7 @@ with right_col:
     # INTERVIEW DATA
     # --------------------------
 
-    # Performance Fix 2: Limit the database query to 500 records to prevent RAM overload
-    result = (
-        supabase
-        .table("interview_management")
-        .select("*")
-        .order(
-            "interview_id",
-            desc=True
-        )
-        .limit(2000)
-        .execute()
-    )
-
-    interviews = result.data
+    interviews = fetch_all_from_table("interview_management", select_fields="*", order_by="interview_id", desc=True)
 
     # --- UPDATED: 3-Column layout for filters ---
     filter_col1, filter_col2, filter_col3 = st.columns(3)

@@ -5,7 +5,7 @@ from datetime import datetime
 import os
 import re
 import textwrap
-from common import show_logout, show_job_notifications, show_user_profile, render_pagination
+from common import show_logout, show_job_notifications, show_user_profile, render_pagination, fetch_all_legacy_candidates, fetch_all_live_candidates, fetch_all_from_table
 from theme import apply_theme
 import storage
 from matcher import calculate_candidate_match, get_top_matched_candidates
@@ -82,28 +82,20 @@ def get_all_sub_categories():
 def get_recruiters():
     return supabase.table("users").select("*").eq("role", "Recruiter").eq("status", "Active").execute().data
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=30)
 def get_all_candidates_for_matching():
     """
     Fetches both Live active candidates from candidate_management 
     and Historical candidates from legacy_candidates for unified matching.
+    Uses paginated fetching to load 100% of candidates (5,000+).
     """
     all_pool = []
     
     # 1. Fetch live candidates
     live_candidate_ids = set()
     try:
-        live_data = (
-            supabase
-            .table("candidate_management")
-            .select(
-                "candidate_id, candidate_reference_no, first_name, last_name, gender, approx_dob, email, mobile_no, current_company, current_designation, skills, experience_years, experience_months, current_ctc, expected_ctc, current_location, candidate_status, current_stage, resume_path, job_id, created_by_name, created_by_user_id, created_on, remarks"
-            )
-            .order("candidate_id", desc=True)
-            .limit(2000)
-            .execute()
-            .data or []
-        )
+        fields_live = "candidate_id, candidate_reference_no, first_name, last_name, gender, approx_dob, email, mobile_no, current_company, current_designation, skills, experience_years, experience_months, current_ctc, expected_ctc, current_location, candidate_status, current_stage, resume_path, job_id, created_by_name, created_by_user_id, created_on, remarks"
+        live_data = fetch_all_live_candidates(fields_live)
         for c in live_data:
             c["source_pool"] = "Live Pool"
             c["is_legacy"] = False
@@ -112,19 +104,10 @@ def get_all_candidates_for_matching():
     except Exception:
         pass
 
-    # 2. Fetch legacy candidates
+    # 2. Fetch all legacy candidates via pagination
     try:
-        legacy_data = (
-            supabase
-            .table("legacy_candidates")
-            .select(
-                "legacy_candidate_id, candidate_reference_no, first_name, last_name, gender, approx_dob, email, mobile_no, current_company, current_designation, skills, experience_years, experience_months, current_ctc, expected_ctc, current_location, notice_period, notice_negotiable, qualification, education_details, resume_name, resume_path, is_migrated_to_active, migrated_candidate_id"
-            )
-            .order("legacy_candidate_id", desc=False)
-            .limit(3000)
-            .execute()
-            .data or []
-        )
+        fields_legacy = "legacy_candidate_id, candidate_reference_no, first_name, last_name, gender, approx_dob, email, mobile_no, current_company, current_designation, skills, experience_years, experience_months, current_ctc, expected_ctc, current_location, notice_period, notice_negotiable, qualification, education_details, resume_name, resume_path, is_migrated_to_active, migrated_candidate_id"
+        legacy_data = fetch_all_legacy_candidates(fields_legacy)
         for c in legacy_data:
             if c.get("is_migrated_to_active") and c.get("migrated_candidate_id") in live_candidate_ids:
                 continue
@@ -891,7 +874,9 @@ with right_col:
         """
         
         if is_admin:
-            jobs = supabase.table("job_management").select(select_query).order("job_id", desc=True).limit(2000).execute()
+            all_jobs_data = fetch_all_from_table("job_management", select_fields=select_query, order_by="job_id", desc=True)
+            class DummyResp: data = all_jobs_data
+            jobs = DummyResp()
         else:
             my_assignments = supabase.table("job_assignment").select("job_id").eq("user_id", st.session_state.user_id).execute().data
             my_job_ids = [a["job_id"] for a in my_assignments]
@@ -902,7 +887,6 @@ with right_col:
                     .in_("job_id", my_job_ids)
                     .eq("job_status", "Open")
                     .order("job_id", desc=True)
-                    .limit(2000)
                     .execute()
                 )
             else:

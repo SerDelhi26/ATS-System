@@ -208,3 +208,62 @@ def render_pagination(items, page_size_default=25, key_prefix="page", page_size_
         page_items = items[start_idx:end_idx]
 
     return page_items, current_page, total_pages
+
+
+def fetch_all_legacy_candidates(select_fields: str):
+    """
+    Paginates through legacy_candidates table in Supabase to fetch ALL rows,
+    bypassing PostgREST default 1000 row REST query cap.
+    """
+    all_data = []
+    chunk_size = 1000
+    start = 0
+    while True:
+        try:
+            data = (
+                supabase.table("legacy_candidates")
+                .select(select_fields)
+                .order("legacy_candidate_id", desc=False)
+                .range(start, start + chunk_size - 1)
+                .execute()
+                .data or []
+            )
+            all_data.extend(data)
+            if len(data) < chunk_size:
+                break
+            start += chunk_size
+        except Exception:
+            break
+    return all_data
+
+
+def fetch_all_live_candidates(select_fields: str):
+    """
+    Paginates through candidate_management table in Supabase to fetch ALL live candidate rows.
+    """
+    return fetch_all_from_table("candidate_management", select_fields=select_fields, order_by="candidate_id", desc=True)
+
+
+def fetch_all_from_table(table_name: str, select_fields: str = "*", order_by: str = None, desc: bool = False):
+    """
+    Paginates through any Supabase table to fetch ALL records cleanly,
+    bypassing the PostgREST default 1000-row limit per request.
+    """
+    all_data = []
+    chunk_size = 1000
+    start = 0
+    while True:
+        try:
+            q = supabase.table(table_name).select(select_fields)
+            if order_by:
+                q = q.order(order_by, desc=desc)
+            res = q.range(start, start + chunk_size - 1).execute()
+            data = res.data or []
+            all_data.extend(data)
+            if len(data) < chunk_size:
+                break
+            start += chunk_size
+        except Exception:
+            break
+    return all_data
+
