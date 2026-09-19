@@ -87,6 +87,25 @@ st.set_page_config(
 
 apply_theme()
 
+# Data Protection: Hide table CSV hover toolbars for non-Admin users
+if st.session_state.get("user_role") != "Admin":
+    st.markdown(
+        """
+        <style>
+        [data-testid="stElementToolbar"],
+        [data-testid="stDataFrameToolbar"],
+        button[title="Download as CSV"],
+        button[title="Download data as CSV"],
+        button[title="Download as TSV"],
+        div[data-testid="stElementToolbarButton"] {
+            display: none !important;
+            visibility: hidden !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
 with st.sidebar:
     show_user_profile()
     show_logout()
@@ -129,6 +148,7 @@ def check_table_exists():
     except Exception:
         return False
 
+@st.cache_data(ttl=60)
 def fetch_talent_mappings():
     """Fetches all talent mapping records from Supabase."""
     try:
@@ -152,6 +172,7 @@ def insert_talent_mapping(record):
         record["created_on"] = datetime.utcnow().isoformat()
         record["updated_on"] = datetime.utcnow().isoformat()
         res = supabase.table("talent_mapping").insert(record).execute()
+        st.cache_data.clear()
         return True, res.data
     except Exception as e:
         return False, str(e)
@@ -161,6 +182,7 @@ def update_talent_mapping(mapping_id, updates):
     try:
         updates["updated_on"] = datetime.utcnow().isoformat()
         res = supabase.table("talent_mapping").update(updates).eq("mapping_id", mapping_id).execute()
+        st.cache_data.clear()
         return True, res.data
     except Exception as e:
         return False, str(e)
@@ -172,11 +194,12 @@ def delete_talent_mapping(mapping_id):
         supabase.table("talent_mapping").update({"reports_to_id": None}).eq("reports_to_id", mapping_id).execute()
         # Delete the record
         supabase.table("talent_mapping").delete().eq("mapping_id", mapping_id).execute()
+        st.cache_data.clear()
         return True, "Deleted successfully"
     except Exception as e:
         return False, str(e)
 
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=60)
 def get_all_ats_candidates():
     """Fetches candidate names and profile details for smart auto-fill."""
     candidates = []
@@ -3673,11 +3696,18 @@ if st.session_state.tm_edit_node_id is not None:
 # ==============================================================================
 # 9. DUAL SYNCHRONIZED VIEWS: TABS (MASTER SHEET vs ORG CHART vs EXPORT)
 # ==============================================================================
-view_tab_table, view_tab_graph, view_tab_export = st.tabs([
-    "📋 Talent Mapping Master Sheet",
-    "🌳 Visual Org Hierarchy Chart",
-    "📥 Export & Intelligence Report"
-])
+if st.session_state.get("user_role") == "Admin":
+    view_tab_table, view_tab_graph, view_tab_export = st.tabs([
+        "📋 Talent Mapping Master Sheet",
+        "🌳 Visual Org Hierarchy Chart",
+        "📥 Export & Intelligence Report"
+    ])
+else:
+    view_tab_table, view_tab_graph = st.tabs([
+        "📋 Talent Mapping Master Sheet",
+        "🌳 Visual Org Hierarchy Chart"
+    ])
+    view_tab_export = None
 
 # ------------------------------------------------------------------------------
 # TAB 1: TALENT MAPPING MASTER SHEET (EXACT DB COLUMNS + SAVE SYNC)
@@ -4128,187 +4158,189 @@ with view_tab_graph:
 
 
 # ------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 # TAB 3: EXPORT & BUSINESS INTELLIGENCE REPORT
 # ------------------------------------------------------------------------------
-with view_tab_export:
-    st.markdown("### 📥 Talent & Business Intelligence Reports")
-    st.caption("Generate, visualize, and export market talent intelligence, competitor hierarchies, and executive compensation dossiers.")
+if view_tab_export is not None:
+    with view_tab_export:
+        st.markdown("### 📥 Talent & Business Intelligence Reports")
+        st.caption("Generate, visualize, and export market talent intelligence, competitor hierarchies, and executive compensation dossiers.")
 
-    if not raw_mappings:
-        st.info("No talent mapping records found in the database. Add candidates via Master Sheet or Org Chart to generate reports!")
-    else:
-        # Export Filters
-        all_export_companies = sorted(list(set(m.get("company_name") for m in raw_mappings if m.get("company_name"))))
-        all_export_types = sorted(list(set(m.get("company_type") for m in raw_mappings if m.get("company_type"))))
+        if not raw_mappings:
+            st.info("No talent mapping records found in the database. Add candidates via Master Sheet or Org Chart to generate reports!")
+        else:
+            # Export Filters
+            all_export_companies = sorted(list(set(m.get("company_name") for m in raw_mappings if m.get("company_name"))))
+            all_export_types = sorted(list(set(m.get("company_type") for m in raw_mappings if m.get("company_type"))))
 
-        f_col1, f_col2, f_col3 = st.columns([1.5, 1.5, 2])
-        with f_col1:
-            exp_sel_comp = st.selectbox("🏢 Filter Company", ["All Companies"] + all_export_companies, key="exp_report_company_sel")
-        with f_col2:
-            exp_sel_type = st.selectbox("🏷️ Filter Sector / Type", ["All Sectors"] + all_export_types, key="exp_report_type_sel")
-        with f_col3:
-            exp_search_q = st.text_input("🔍 Search Keyword (Name / Role / City)", placeholder="e.g. Operations, Mumbai, Vice President", key="exp_report_search_q")
+            f_col1, f_col2, f_col3 = st.columns([1.5, 1.5, 2])
+            with f_col1:
+                exp_sel_comp = st.selectbox("🏢 Filter Company", ["All Companies"] + all_export_companies, key="exp_report_company_sel")
+            with f_col2:
+                exp_sel_type = st.selectbox("🏷️ Filter Sector / Type", ["All Sectors"] + all_export_types, key="exp_report_type_sel")
+            with f_col3:
+                exp_search_q = st.text_input("🔍 Search Keyword (Name / Role / City)", placeholder="e.g. Operations, Mumbai, Vice President", key="exp_report_search_q")
 
-        # Filter the dataset
-        export_dataset = raw_mappings
-        if exp_sel_comp != "All Companies":
-            export_dataset = [m for m in export_dataset if m.get("company_name") == exp_sel_comp]
-        if exp_sel_type != "All Sectors":
-            export_dataset = [m for m in export_dataset if m.get("company_type") == exp_sel_type]
-        if exp_search_q.strip():
-            sq = exp_search_q.strip().lower()
-            export_dataset = [
-                m for m in export_dataset
-                if sq in (m.get("candidate_name") or "").lower()
-                or sq in (m.get("designation") or "").lower()
-                or sq in (m.get("location") or "").lower()
-                or sq in (m.get("company_name") or "").lower()
-                or sq in (m.get("comments") or "").lower()
-            ]
+            # Filter the dataset
+            export_dataset = raw_mappings
+            if exp_sel_comp != "All Companies":
+                export_dataset = [m for m in export_dataset if m.get("company_name") == exp_sel_comp]
+            if exp_sel_type != "All Sectors":
+                export_dataset = [m for m in export_dataset if m.get("company_type") == exp_sel_type]
+            if exp_search_q.strip():
+                sq = exp_search_q.strip().lower()
+                export_dataset = [
+                    m for m in export_dataset
+                    if sq in (m.get("candidate_name") or "").lower()
+                    or sq in (m.get("designation") or "").lower()
+                    or sq in (m.get("location") or "").lower()
+                    or sq in (m.get("company_name") or "").lower()
+                    or sq in (m.get("comments") or "").lower()
+                ]
 
-        # Top Executive Metrics
-        total_exp_cands = len(export_dataset)
-        unique_exp_comps = len(set(m.get("company_name") for m in export_dataset if m.get("company_name")))
-        top_leaders_count = len([m for m in export_dataset if not m.get("reports_to_id")])
-        cands_with_ctc = len([m for m in export_dataset if m.get("current_ctc") and float(m.get("current_ctc")) > 0])
+            # Top Executive Metrics
+            total_exp_cands = len(export_dataset)
+            unique_exp_comps = len(set(m.get("company_name") for m in export_dataset if m.get("company_name")))
+            top_leaders_count = len([m for m in export_dataset if not m.get("reports_to_id")])
+            cands_with_ctc = len([m for m in export_dataset if m.get("current_ctc") and float(m.get("current_ctc")) > 0])
 
-        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
-        m_c1, m_c2, m_c3, m_c4 = st.columns(4)
-        m_c1.metric("👥 Candidates in Report", total_exp_cands)
-        m_c2.metric("🏢 Companies Covered", unique_exp_comps)
-        m_c3.metric("👑 Top-Level Leaders", top_leaders_count)
-        m_c4.metric("💰 CTC Disclosed Headcount", cands_with_ctc)
+            st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+            m_c1, m_c2, m_c3, m_c4 = st.columns(4)
+            m_c1.metric("👥 Candidates in Report", total_exp_cands)
+            m_c2.metric("🏢 Companies Covered", unique_exp_comps)
+            m_c3.metric("👑 Top-Level Leaders", top_leaders_count)
+            m_c4.metric("💰 CTC Disclosed Headcount", cands_with_ctc)
 
-        st.markdown("---")
+            st.markdown("---")
 
-        # Build Export DataFrame with reporting manager names
-        id_to_name_map = {r["mapping_id"]: f"{r['candidate_name']} ({r.get('designation', '')})" for r in raw_mappings if r.get("mapping_id")}
-        
-        table_rows = []
-        for idx, r in enumerate(export_dataset, 1):
-            mgr_label = id_to_name_map.get(r.get("reports_to_id"), "👑 Top-Level Leader / Root") if r.get("reports_to_id") else "👑 Top-Level Leader / Root"
-            c_ctc = float(r.get("current_ctc")) if r.get("current_ctc") is not None else None
-            e_ctc = float(r.get("expected_ctc")) if r.get("expected_ctc") is not None else None
+            # Build Export DataFrame with reporting manager names
+            id_to_name_map = {r["mapping_id"]: f"{r['candidate_name']} ({r.get('designation', '')})" for r in raw_mappings if r.get("mapping_id")}
             
-            table_rows.append({
-                "S.No": idx,
-                "Candidate ID": r.get("mapping_id"),
-                "Candidate Name": r.get("candidate_name", ""),
-                "Designation": r.get("designation", ""),
-                "Company Name": r.get("company_name", ""),
-                "Sector / Type": r.get("company_type", "Chemicals"),
-                "Reporting Manager": mgr_label,
-                "Location": r.get("location", "N/A"),
-                "Experience": r.get("experience", "N/A"),
-                "Current CTC (₹)": c_ctc,
-                "Expected CTC (₹)": e_ctc,
-                "Contact Number": clean_phone_number(r.get("contact_number")),
-                "Email Address": r.get("email_id", ""),
-                "Recruiter Remarks / Intel": r.get("comments", ""),
-                "Mapped Date": str(r.get("created_on", ""))[:10] if r.get("created_on") else ""
-            })
+            table_rows = []
+            for idx, r in enumerate(export_dataset, 1):
+                mgr_label = id_to_name_map.get(r.get("reports_to_id"), "👑 Top-Level Leader / Root") if r.get("reports_to_id") else "👑 Top-Level Leader / Root"
+                c_ctc = float(r.get("current_ctc")) if r.get("current_ctc") is not None else None
+                e_ctc = float(r.get("expected_ctc")) if r.get("expected_ctc") is not None else None
+                
+                table_rows.append({
+                    "S.No": idx,
+                    "Candidate ID": r.get("mapping_id"),
+                    "Candidate Name": r.get("candidate_name", ""),
+                    "Designation": r.get("designation", ""),
+                    "Company Name": r.get("company_name", ""),
+                    "Sector / Type": r.get("company_type", "Chemicals"),
+                    "Reporting Manager": mgr_label,
+                    "Location": r.get("location", "N/A"),
+                    "Experience": r.get("experience", "N/A"),
+                    "Current CTC (₹)": c_ctc,
+                    "Expected CTC (₹)": e_ctc,
+                    "Contact Number": clean_phone_number(r.get("contact_number")),
+                    "Email Address": r.get("email_id", ""),
+                    "Recruiter Remarks / Intel": r.get("comments", ""),
+                    "Mapped Date": str(r.get("created_on", ""))[:10] if r.get("created_on") else ""
+                })
 
-        df_export = pd.DataFrame(table_rows)
+            df_export = pd.DataFrame(table_rows)
 
-        # Download Action Bar
-        st.markdown("#### ⚡ Download Intelligence Reports")
-        d_col1, d_col2, d_col3 = st.columns([2, 2, 2])
+            # Download Action Bar
+            st.markdown("#### ⚡ Download Intelligence Reports")
+            d_col1, d_col2, d_col3 = st.columns([2, 2, 2])
 
-        # 1. Excel Export Generation (.xlsx)
-        excel_buffer = io.BytesIO()
-        with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-            df_export.to_excel(writer, index=False, sheet_name="Talent Mapping Intel")
-        excel_bytes = excel_buffer.getvalue()
+            # 1. Excel Export Generation (.xlsx)
+            excel_buffer = io.BytesIO()
+            with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+                df_export.to_excel(writer, index=False, sheet_name="Talent Mapping Intel")
+            excel_bytes = excel_buffer.getvalue()
 
-        with d_col1:
-            st.download_button(
-                label="📥 Download Excel Report (.xlsx)",
-                data=excel_bytes,
-                file_name=f"Talent_Mapping_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary",
-                use_container_width=True
+            with d_col1:
+                st.download_button(
+                    label="📥 Download Excel Report (.xlsx)",
+                    data=excel_bytes,
+                    file_name=f"Talent_Mapping_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary",
+                    use_container_width=True
+                )
+
+            # 2. CSV Export (.csv)
+            csv_bytes = df_export.to_csv(index=False).encode("utf-8")
+            with d_col2:
+                st.download_button(
+                    label="📄 Download CSV (.csv)",
+                    data=csv_bytes,
+                    file_name=f"Talent_Mapping_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+
+            with d_col3:
+                sample_template_bytes = generate_sample_import_template()
+                st.download_button(
+                    label="📋 Download Standard Template (.xlsx)",
+                    data=sample_template_bytes,
+                    file_name="Talent_Mapping_Import_Template.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+
+            st.markdown("---")
+
+            # Visual Market Intelligence Charts
+            if total_exp_cands > 0:
+                st.markdown("#### 📊 Market Intelligence & Talent Distribution Analytics")
+                chart_col1, chart_col2 = st.columns(2)
+
+                with chart_col1:
+                    # Company-wise talent distribution
+                    comp_counts = df_export["Company Name"].value_counts().reset_index()
+                    comp_counts.columns = ["Company Name", "Mapped Candidates"]
+                    fig_comp = px.bar(
+                        comp_counts,
+                        x="Company Name",
+                        y="Mapped Candidates",
+                        title="🏢 Talent Headcount by Competitor / Company",
+                        color="Mapped Candidates",
+                        color_continuous_scale="Viridis",
+                        text="Mapped Candidates"
+                    )
+                    fig_comp.update_layout(
+                        template="plotly_dark",
+                        margin=dict(l=20, r=20, t=40, b=20),
+                        height=320
+                    )
+                    fig_comp.update_traces(textposition="outside")
+                    st.plotly_chart(fig_comp, use_container_width=True)
+
+                with chart_col2:
+                    # Sector / Type Breakdown
+                    type_counts = df_export["Sector / Type"].value_counts().reset_index()
+                    type_counts.columns = ["Sector", "Count"]
+                    fig_type = px.pie(
+                        type_counts,
+                        names="Sector",
+                        values="Count",
+                        title="🏷️ Talent Concentration by Sector / Industry",
+                        hole=0.45,
+                        color_discrete_sequence=px.colors.qualitative.Pastel
+                    )
+                    fig_type.update_layout(
+                        template="plotly_dark",
+                        margin=dict(l=20, r=20, t=40, b=20),
+                        height=320
+                    )
+                    st.plotly_chart(fig_type, use_container_width=True)
+
+            # Live Data Table Preview
+            st.markdown("#### 👁️ Report Preview & Detailed Talent Roster")
+            st.dataframe(
+                df_export,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Current CTC (₹)": st.column_config.NumberColumn("Current CTC", format="₹%d"),
+                    "Expected CTC (₹)": st.column_config.NumberColumn("Expected CTC", format="₹%d"),
+                    "Contact Number": st.column_config.TextColumn("Phone"),
+                    "Email Address": st.column_config.TextColumn("Email"),
+                    "Candidate ID": st.column_config.NumberColumn("ID", width="small")
+                }
             )
-
-        # 2. CSV Export (.csv)
-        csv_bytes = df_export.to_csv(index=False).encode("utf-8")
-        with d_col2:
-            st.download_button(
-                label="📄 Download CSV (.csv)",
-                data=csv_bytes,
-                file_name=f"Talent_Mapping_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-
-        with d_col3:
-            sample_template_bytes = generate_sample_import_template()
-            st.download_button(
-                label="📋 Download Standard Template (.xlsx)",
-                data=sample_template_bytes,
-                file_name="Talent_Mapping_Import_Template.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
-
-        st.markdown("---")
-
-        # Visual Market Intelligence Charts
-        if total_exp_cands > 0:
-            st.markdown("#### 📊 Market Intelligence & Talent Distribution Analytics")
-            chart_col1, chart_col2 = st.columns(2)
-
-            with chart_col1:
-                # Company-wise talent distribution
-                comp_counts = df_export["Company Name"].value_counts().reset_index()
-                comp_counts.columns = ["Company Name", "Mapped Candidates"]
-                fig_comp = px.bar(
-                    comp_counts,
-                    x="Company Name",
-                    y="Mapped Candidates",
-                    title="🏢 Talent Headcount by Competitor / Company",
-                    color="Mapped Candidates",
-                    color_continuous_scale="Viridis",
-                    text="Mapped Candidates"
-                )
-                fig_comp.update_layout(
-                    template="plotly_dark",
-                    margin=dict(l=20, r=20, t=40, b=20),
-                    height=320
-                )
-                fig_comp.update_traces(textposition="outside")
-                st.plotly_chart(fig_comp, use_container_width=True)
-
-            with chart_col2:
-                # Sector / Type Breakdown
-                type_counts = df_export["Sector / Type"].value_counts().reset_index()
-                type_counts.columns = ["Sector", "Count"]
-                fig_type = px.pie(
-                    type_counts,
-                    names="Sector",
-                    values="Count",
-                    title="🏷️ Talent Concentration by Sector / Industry",
-                    hole=0.45,
-                    color_discrete_sequence=px.colors.qualitative.Pastel
-                )
-                fig_type.update_layout(
-                    template="plotly_dark",
-                    margin=dict(l=20, r=20, t=40, b=20),
-                    height=320
-                )
-                st.plotly_chart(fig_type, use_container_width=True)
-
-        # Live Data Table Preview
-        st.markdown("#### 👁️ Report Preview & Detailed Talent Roster")
-        st.dataframe(
-            df_export,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Current CTC (₹)": st.column_config.NumberColumn("Current CTC", format="₹%d"),
-                "Expected CTC (₹)": st.column_config.NumberColumn("Expected CTC", format="₹%d"),
-                "Contact Number": st.column_config.TextColumn("Phone"),
-                "Email Address": st.column_config.TextColumn("Email"),
-                "Candidate ID": st.column_config.NumberColumn("ID", width="small")
-            }
-        )

@@ -5,7 +5,7 @@ from datetime import datetime
 import os
 import re
 import textwrap
-from common import show_logout, show_job_notifications, show_user_profile, render_pagination, fetch_all_legacy_candidates, fetch_all_live_candidates, fetch_all_from_table
+from common import show_logout, show_job_notifications, show_user_profile, render_pagination, fetch_all_legacy_candidates, fetch_all_live_candidates, fetch_all_from_table, clear_data_cache
 from theme import apply_theme
 import storage
 from matcher import calculate_candidate_match, get_top_matched_candidates

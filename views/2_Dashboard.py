@@ -1,5 +1,5 @@
 import streamlit as st
-from common import show_logout, show_job_notifications, show_user_profile
+from common import show_logout, show_job_notifications, show_user_profile, fetch_all_live_candidates, fetch_all_from_table
 from db import supabase
 import pandas as pd
 import plotly.express as px
@@ -62,17 +62,38 @@ with st.sidebar:
 
 st.markdown("# 📊 ATS Analytics Dashboard")
 st.caption(f"Welcome back, **{st.session_state.user_name}** ({st.session_state.user_role})")
+
+# Data Protection: Hide table download buttons & toolbars for non-Admin users
+if st.session_state.get("user_role") != "Admin":
+    st.markdown(
+        """
+        <style>
+        [data-testid="stElementToolbar"],
+        [data-testid="stDataFrameToolbar"],
+        button[title="Download as CSV"],
+        button[title="Download data as CSV"],
+        div[data-testid="stElementToolbarButton"],
+        .stDownloadButton,
+        [data-testid="stDownloadButton"] {
+            display: none !important;
+            visibility: hidden !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
 # ==========================
 # DATA FETCHING
 # ==========================
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=60)
 def get_dashboard_data():
-    jobs = supabase.table("job_management").select("job_id, job_reference_no, job_status, openings, company_id, job_title_id, created_date, created_by").execute().data or []
-    candidates = supabase.table("candidate_management").select("candidate_id, candidate_reference_no, first_name, last_name, job_id, current_stage, candidate_status, created_by_name, created_on, updated_on, mobile_no, email, current_company, current_designation, experience_years, experience_months, current_ctc, expected_ctc, notice_period, remarks").execute().data or []
-    interviews = supabase.table("interview_management").select("interview_id, candidate_id, job_id, interview_round, interview_date, interview_status, feedback, created_by_name, created_on").execute().data or []
-    offers = supabase.table("offer_management").select("offer_id, candidate_id, job_id, offer_status, offered_ctc, joining_date, remarks, created_by_name, created_on").execute().data or []
+    jobs = fetch_all_from_table("job_management", select_fields="job_id, job_reference_no, job_status, openings, company_id, job_title_id, created_date, created_by")
+    candidates = fetch_all_live_candidates("candidate_id, candidate_reference_no, first_name, last_name, job_id, current_stage, candidate_status, created_by_name, created_on, updated_on, mobile_no, email, current_company, current_designation, experience_years, experience_months, current_ctc, expected_ctc, notice_period, remarks")
+    interviews = fetch_all_from_table("interview_management", select_fields="interview_id, candidate_id, job_id, interview_round, interview_date, interview_status, feedback, created_by_name, created_on")
+    offers = fetch_all_from_table("offer_management", select_fields="offer_id, candidate_id, job_id, offer_status, offered_ctc, joining_date, remarks, created_by_name, created_on")
     recruiters = supabase.table("users").select("user_id, full_name").eq("role", "Recruiter").execute().data or []
     job_titles = supabase.table("job_title_master").select("job_title_id, job_title_name").execute().data or []
     companies = supabase.table("company_master").select("company_id, company_name").execute().data or []
@@ -86,26 +107,60 @@ jobs, candidates, interviews, offers, recruiters, job_titles, companies, job_ass
 job_title_lookup = {item["job_title_id"]: item["job_title_name"] for item in job_titles}
 company_lookup = {item["company_id"]: item["company_name"] for item in companies}
 recruiter_user_map = {r["full_name"]: r["user_id"] for r in recruiters}
+recruiter_id_to_name = {r["user_id"]: r["full_name"] for r in recruiters}
 offer_map = {o["candidate_id"]: o for o in offers if o.get("candidate_id")}
 
 job_lookup = {}
-job_options = ["All Jobs"]
+all_job_labels_map = {}
+all_label_to_job_id = {}
 for job in jobs:
     title = job_title_lookup.get(job["job_title_id"], "Unknown")
     label = f"{job['job_reference_no']} | {title}"
     job_lookup[job["job_id"]] = label
-    job_options.append(label)
+    all_job_labels_map[job["job_id"]] = label
+    all_label_to_job_id[label] = job["job_id"]
 
-def parse_date(date_str):
-    if not date_str:
+# Build reciprocal mappings between Jobs and Recruiters
+job_id_to_rec_uids = {}
+for j in jobs:
+    jid = j["job_id"]
+    uids = {ja["user_id"] for ja in job_assignments if ja.get("job_id") == jid}
+    if j.get("created_by"):
+        uids.add(j["created_by"])
+    job_id_to_rec_uids[jid] = uids
+
+rec_uid_to_job_ids = {}
+for r in recruiters:
+    uid = r["user_id"]
+    jids = {j["job_id"] for j in jobs if j.get("created_by") == uid or any(ja.get("job_id") == j["job_id"] and ja.get("user_id") == uid for ja in job_assignments)}
+    rec_uid_to_job_ids[uid] = jids
+
+def parse_date(date_val):
+    if not date_val:
         return None
-    clean_time = str(date_str).split(".")[0].split("+")[0].replace("Z", "").strip()
-    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d"):
+    if isinstance(date_val, date) and not isinstance(date_val, datetime):
+        return date_val
+    if isinstance(date_val, datetime):
+        return date_val.date()
+    val_str = str(date_val).strip()
+    if not val_str or val_str.lower() in ["none", "nan", "null"]:
+        return None
+    clean_time = val_str.split(".")[0].split("+")[0].replace("Z", "").replace("T", " ").strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d"):
         try:
             return datetime.strptime(clean_time, fmt).date()
         except Exception:
             pass
-    return None
+    try:
+        return datetime.fromisoformat(clean_time).date()
+    except Exception:
+        return None
+
+def safe_int(val):
+    try:
+        return int(val) if val is not None else None
+    except (ValueError, TypeError):
+        return None
 
 # Helper function to convert 0 to None for cleaner UI rendering in tables
 def clean_zero(val):
@@ -116,6 +171,34 @@ def clean_zero(val):
 # ==========================
 st.markdown("### 🔍 Dashboard Filters")
 
+# Read current selections from session state for dynamic options
+cur_rec_filter = st.session_state.get("dash_recruiter_select", "All Recruiters")
+cur_job_filter = st.session_state.get("dash_job_select", "All Jobs")
+
+# Dynamic options for Recruiters based on selected Job
+if cur_job_filter != "All Jobs" and cur_job_filter in all_label_to_job_id:
+    target_job_id = all_label_to_job_id[cur_job_filter]
+    allowed_rec_uids = job_id_to_rec_uids.get(target_job_id, set())
+    recruiter_options = ["All Recruiters"] + sorted([r["full_name"] for r in recruiters if r["user_id"] in allowed_rec_uids])
+else:
+    recruiter_options = ["All Recruiters"] + sorted([r["full_name"] for r in recruiters])
+
+if cur_rec_filter not in recruiter_options:
+    cur_rec_filter = "All Recruiters"
+    st.session_state["dash_recruiter_select"] = "All Recruiters"
+
+# Dynamic options for Jobs based on selected Recruiter
+if cur_rec_filter != "All Recruiters" and cur_rec_filter in recruiter_user_map:
+    target_rec_uid = recruiter_user_map[cur_rec_filter]
+    allowed_job_ids = rec_uid_to_job_ids.get(target_rec_uid, set())
+    job_options = ["All Jobs"] + [all_job_labels_map[jid] for jid in allowed_job_ids if jid in all_job_labels_map]
+else:
+    job_options = ["All Jobs"] + [all_job_labels_map[j["job_id"]] for j in jobs if j["job_id"] in all_job_labels_map]
+
+if cur_job_filter not in job_options:
+    cur_job_filter = "All Jobs"
+    st.session_state["dash_job_select"] = "All Jobs"
+
 f_col1, f_col2, f_col3, f_col4, f_col5 = st.columns([1.5, 2, 2, 2, 2.5])
 
 with f_col1:
@@ -125,50 +208,62 @@ with f_col2:
 with f_col3:
     to_date = st.date_input("To Date", value=date.today(), disabled=not use_date_filter)
 with f_col4:
-    recruiter_options = ["All Recruiters"] + sorted(list({r["full_name"] for r in recruiters}))
-    recruiter_filter = st.selectbox("👤 Recruiter", recruiter_options)
+    recruiter_filter = st.selectbox("👤 Recruiter", recruiter_options, key="dash_recruiter_select")
 with f_col5:
-    job_filter = st.selectbox("💼 Job", job_options)
+    job_filter = st.selectbox("💼 Job", job_options, key="dash_job_select")
 
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
 # ==========================
 # FILTER DATA ACROSS JOBS, CANDIDATES, INTERVIEWS & OFFERS
 # ==========================
+selected_job_id = all_label_to_job_id.get(job_filter) if job_filter != "All Jobs" else None
+selected_rec_uid = recruiter_user_map.get(recruiter_filter) if recruiter_filter != "All Recruiters" else None
+rec_associated_job_ids = rec_uid_to_job_ids.get(selected_rec_uid, set()) if selected_rec_uid else set()
+
 # 1. Filter Jobs
 filtered_jobs = []
 for j in jobs:
+    jid = j.get("job_id")
     job_created_date = parse_date(j.get("created_date"))
+    
     if use_date_filter and job_created_date:
         if job_created_date < from_date or job_created_date > to_date:
             continue
-    if job_filter != "All Jobs":
-        selected_job_id = next((jid for jid, lbl in job_lookup.items() if lbl == job_filter), None)
-        if j["job_id"] != selected_job_id:
-            continue
+            
+    if selected_job_id is not None and jid != selected_job_id:
+        continue
+        
     if recruiter_filter != "All Recruiters":
-        rec_user_id = recruiter_user_map.get(recruiter_filter)
-        assigned_job_ids = {ja["job_id"] for ja in job_assignments if ja.get("user_id") == rec_user_id}
-        if j["job_id"] not in assigned_job_ids and j.get("created_by") != rec_user_id:
+        if jid not in rec_associated_job_ids and j.get("created_by") != selected_rec_uid:
             continue
+            
     filtered_jobs.append(j)
+
+filtered_job_ids = {j["job_id"] for j in filtered_jobs}
 
 # 2. Filter Candidates
 filtered_candidates = []
 for c in candidates:
-    parsed_date = parse_date(c.get("created_on", ""))
-    if use_date_filter:
-        if not parsed_date or parsed_date < from_date or parsed_date > to_date:
+    c_jid = safe_int(c.get("job_id"))
+    cand_date = parse_date(c.get("created_on")) or parse_date(c.get("updated_on"))
+    
+    if use_date_filter and cand_date:
+        if cand_date < from_date or cand_date > to_date:
             continue
-    if job_filter != "All Jobs":
-        job_label = job_lookup.get(c.get("job_id"), "Unknown Job")
-        if job_label != job_filter:
-            continue
+            
+    if selected_job_id is not None and c_jid != selected_job_id:
+        continue
+        
     if recruiter_filter != "All Recruiters":
-        rec_user_id = recruiter_user_map.get(recruiter_filter)
-        assigned_job_ids = {ja["job_id"] for ja in job_assignments if ja.get("user_id") == rec_user_id}
-        if c.get("created_by_name") != recruiter_filter and c.get("job_id") not in assigned_job_ids:
+        c_rec_name = str(c.get("created_by_name") or "").strip().lower()
+        c_rec_id = safe_int(c.get("created_by_user_id"))
+        req_rec_name = recruiter_filter.strip().lower()
+        
+        is_creator = (c_rec_name == req_rec_name) or (selected_rec_uid is not None and c_rec_id == selected_rec_uid)
+        if not is_creator:
             continue
+            
     filtered_candidates.append(c)
 
 filtered_candidate_ids = {c["candidate_id"] for c in filtered_candidates}
@@ -565,9 +660,9 @@ current_user_role = st.session_state.get("user_role")
 assigned_job_ids = [a["job_id"] for a in job_assignments if a.get("user_id") == current_user_id]
 
 if current_user_role == "Admin":
-    workplan_jobs = [j for j in jobs if j.get("job_status") == "Open"]
+    workplan_jobs = [j for j in filtered_jobs if j.get("job_status") == "Open"]
 else:
-    workplan_jobs = [j for j in jobs if j.get("job_status") == "Open" and j.get("job_id") in assigned_job_ids]
+    workplan_jobs = [j for j in filtered_jobs if j.get("job_status") == "Open" and j.get("job_id") in assigned_job_ids]
 
 workplan_data = []
 

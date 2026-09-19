@@ -13,6 +13,10 @@ if not st.session_state.get("logged_in", False):
     st.switch_page("Home.py")
     st.stop()
 
+if st.session_state.get("user_role") != "Admin":
+    st.error("⛔ Access Denied: Report Management is restricted to Admin users.")
+    st.stop()
+
 # ==========================
 # PAGE CONFIG
 # ==========================

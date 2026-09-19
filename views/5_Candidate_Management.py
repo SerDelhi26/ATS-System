@@ -4,7 +4,7 @@ import os
 import textwrap
 from datetime import datetime, date
 from db import supabase
-from common import show_logout, show_job_notifications, show_user_profile, render_pagination, fetch_all_legacy_candidates, fetch_all_live_candidates
+from common import show_logout, show_job_notifications, show_user_profile, render_pagination, fetch_all_legacy_candidates, fetch_all_live_candidates, clear_data_cache
 from theme import apply_theme
 import storage
 import ai_parser
@@ -1523,10 +1523,61 @@ with right_col:
             key="cand_dir_search"
         )
 
-        job_filter_options = ["All Jobs"]
+        # Build reciprocal mappings between Jobs and Recruiters
+        cand_job_labels_map = {}
+        cand_label_to_job_id = {}
+        cand_job_id_to_rec = {}
+        cand_rec_name_to_job_ids = {}
+
         for job in jobs:
-            title_name = job_title_lookup.get(job["job_title_id"], "Unknown Job Title")
-            job_filter_options.append(f"{job['job_reference_no']} | {title_name}")
+            t_name = job_title_lookup.get(job["job_title_id"], "Unknown Job Title")
+            j_lbl = f"{job['job_reference_no']} | {t_name}"
+            cand_job_labels_map[job["job_id"]] = j_lbl
+            cand_label_to_job_id[j_lbl] = job["job_id"]
+
+        cur_c_job = st.session_state.get("cand_dir_job_filter", "All Jobs")
+        cur_c_rec = st.session_state.get("cand_dir_rec_filter", "All Recruiters")
+
+        all_recruiters = sorted(list({user["full_name"] for user in get_recruiters()})) if st.session_state.user_role == "Admin" else []
+
+        if cur_c_job != "All Jobs" and cur_c_job in cand_label_to_job_id:
+            sel_jid = cand_label_to_job_id[cur_c_job]
+            # Find recruiters assigned to this job
+            assigned_recs = set()
+            try:
+                assignments = supabase.table("job_assignment").select("user_id").eq("job_id", sel_jid).execute().data or []
+                rec_uids = {a["user_id"] for a in assignments}
+                if rec_uids:
+                    u_data = supabase.table("users").select("full_name").in_("user_id", list(rec_uids)).execute().data or []
+                    assigned_recs = {u["full_name"] for u in u_data}
+            except Exception:
+                pass
+            recruiter_options = ["All Recruiters"] + sorted(list(assigned_recs)) if assigned_recs else ["All Recruiters"] + all_recruiters
+        else:
+            recruiter_options = ["All Recruiters"] + all_recruiters
+
+        if cur_c_rec not in recruiter_options:
+            cur_c_rec = "All Recruiters"
+            st.session_state["cand_dir_rec_filter"] = "All Recruiters"
+
+        if cur_c_rec != "All Recruiters":
+            # Find jobs for selected recruiter
+            allowed_jids = set()
+            try:
+                rec_user = supabase.table("users").select("user_id").eq("full_name", cur_c_rec).execute().data or []
+                if rec_user:
+                    ruid = rec_user[0]["user_id"]
+                    ass = supabase.table("job_assignment").select("job_id").eq("user_id", ruid).execute().data or []
+                    allowed_jids = {a["job_id"] for a in ass}
+            except Exception:
+                pass
+            job_filter_options = ["All Jobs"] + [cand_job_labels_map[jid] for jid in allowed_jids if jid in cand_job_labels_map]
+        else:
+            job_filter_options = ["All Jobs"] + [cand_job_labels_map[job["job_id"]] for job in jobs if job["job_id"] in cand_job_labels_map]
+
+        if cur_c_job not in job_filter_options:
+            cur_c_job = "All Jobs"
+            st.session_state["cand_dir_job_filter"] = "All Jobs"
 
         with filter_col3:
             job_filter = st.selectbox("Job", job_filter_options, key="cand_dir_job_filter")
@@ -1534,9 +1585,6 @@ with right_col:
         with filter_col4:
             recruiter_filter = "All Recruiters"
             if st.session_state.user_role == "Admin":
-                users = get_recruiters()
-                recruiter_options = ["All Recruiters"]
-                recruiter_options.extend(sorted(list({user["full_name"] for user in users})))
                 recruiter_filter = st.selectbox("Recruiter", recruiter_options, key="cand_dir_rec_filter")
 
         fields_main = "candidate_id, candidate_reference_no, job_id, first_name, last_name, gender, approx_dob, mobile_no, email, current_company, skills, candidate_status, current_stage, created_by_name, created_by_user_id, experience_years, experience_months, resume_path, remarks"

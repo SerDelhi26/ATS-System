@@ -210,10 +210,39 @@ def render_pagination(items, page_size_default=25, key_prefix="page", page_size_
     return page_items, current_page, total_pages
 
 
+def clear_data_cache():
+    """Safely clears Streamlit data cache when mutations occur (Insert/Update/Delete)."""
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+
+@st.cache_data(ttl=120)
+def get_master_lookups():
+    """Fetches and caches master table lookups to avoid redundant database calls."""
+    try:
+        companies = supabase.table("company_master").select("company_id, company_name").execute().data or []
+        job_titles = supabase.table("job_title_master").select("job_title_id, job_title_name").execute().data or []
+        categories = supabase.table("category_master").select("category_id, category_name").execute().data or []
+        sub_categories = supabase.table("sub_category_master").select("sub_category_id, category_id, sub_category_name").execute().data or []
+        users = supabase.table("users").select("user_id, full_name, email, role").execute().data or []
+        return {
+            "companies": companies,
+            "job_titles": job_titles,
+            "categories": categories,
+            "sub_categories": sub_categories,
+            "users": users
+        }
+    except Exception:
+        return {"companies": [], "job_titles": [], "categories": [], "sub_categories": [], "users": []}
+
+
+@st.cache_data(ttl=60)
 def fetch_all_legacy_candidates(select_fields: str):
     """
     Paginates through legacy_candidates table in Supabase to fetch ALL rows,
-    bypassing PostgREST default 1000 row REST query cap.
+    bypassing PostgREST default 1000 row REST query cap. Cached for performance.
     """
     all_data = []
     chunk_size = 1000
@@ -244,10 +273,11 @@ def fetch_all_live_candidates(select_fields: str):
     return fetch_all_from_table("candidate_management", select_fields=select_fields, order_by="candidate_id", desc=True)
 
 
+@st.cache_data(ttl=60)
 def fetch_all_from_table(table_name: str, select_fields: str = "*", order_by: str = None, desc: bool = False):
     """
     Paginates through any Supabase table to fetch ALL records cleanly,
-    bypassing the PostgREST default 1000-row limit per request.
+    bypassing the PostgREST default 1000-row limit per request. Cached for performance.
     """
     all_data = []
     chunk_size = 1000
@@ -266,4 +296,111 @@ def fetch_all_from_table(table_name: str, select_fields: str = "*", order_by: st
         except Exception:
             break
     return all_data
+
+
+def fetch_candidates_server_side(
+    page: int = 1,
+    page_size: int = 25,
+    search_text: str = "",
+    status_filter: str = "All Status",
+    gender_filter: str = "All Genders",
+    selected_job_id: int = None,
+    recruiter_filter: str = "All Recruiters",
+    select_fields: str = "*"
+):
+    """
+    Executes database-level server-side filtering, searching, and pagination in Postgres SQL.
+    Returns (candidate_records, total_count). Scalable to 100,000+ candidate profiles.
+    """
+    try:
+        q = supabase.table("candidate_management").select(select_fields, count="exact")
+        
+        if status_filter != "All Status":
+            q = q.or_(f"candidate_status.eq.{status_filter},current_stage.eq.{status_filter}")
+            
+        if gender_filter != "All Genders":
+            q = q.eq("gender", gender_filter)
+            
+        if selected_job_id:
+            q = q.eq("job_id", selected_job_id)
+            
+        if recruiter_filter != "All Recruiters":
+            q = q.eq("created_by_name", recruiter_filter)
+            
+        if search_text and search_text.strip():
+            st_clean = search_text.strip()
+            q = q.or_(
+                f"candidate_reference_no.ilike.%{st_clean}%,"
+                f"first_name.ilike.%{st_clean}%,"
+                f"last_name.ilike.%{st_clean}%,"
+                f"email.ilike.%{st_clean}%,"
+                f"mobile_no.ilike.%{st_clean}%,"
+                f"current_company.ilike.%{st_clean}%,"
+                f"skills.ilike.%{st_clean}%"
+            )
+            
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size - 1
+        
+        res = q.order("candidate_id", desc=True).range(start_idx, end_idx).execute()
+        return res.data or [], res.count or 0
+    except Exception:
+        return [], 0
+
+
+def render_server_pagination_controls(total_items: int, page_size_default=25, key_prefix="server_page", page_size_options=[25, 50, 100]):
+    """
+    Renders Previous/Next controls for server-side SQL paginated queries.
+    Returns (current_page, page_size).
+    """
+    page_key = f"{key_prefix}_current_page"
+    if page_key not in st.session_state:
+        st.session_state[page_key] = 1
+
+    col_info, col_size, col_prev, col_page, col_next = st.columns([3.5, 1.8, 1.2, 1.8, 1.2])
+
+    page_size = col_size.selectbox(
+        "Rows per page",
+        options=page_size_options,
+        index=page_size_options.index(page_size_default) if page_size_default in page_size_options else 0,
+        key=f"{key_prefix}_size_select",
+        label_visibility="collapsed"
+    )
+
+    total_pages = max(1, (total_items + page_size - 1) // page_size)
+
+    if st.session_state[page_key] > total_pages:
+        st.session_state[page_key] = total_pages
+    if st.session_state[page_key] < 1:
+        st.session_state[page_key] = 1
+
+    current_page = st.session_state[page_key]
+    start_idx = (current_page - 1) * page_size
+    end_idx = min(start_idx + page_size, total_items)
+
+    col_info.markdown(
+        f"<div style='padding-top: 6px; color: #475569; font-size: 13px;'>"
+        f"Showing <b>{start_idx + 1 if total_items > 0 else 0}–{end_idx}</b> of <b>{total_items}</b> records (Server-side)"
+        f"</div>",
+        unsafe_allow_html=True
+    )
+
+    if col_prev.button("◀ Prev", key=f"{key_prefix}_prev_btn", disabled=(current_page <= 1), use_container_width=True):
+        st.session_state[page_key] -= 1
+        st.rerun()
+
+    col_page.markdown(
+        f"<div style='text-align: center; padding-top: 6px; font-weight: 600; font-size: 13px; color: #1E293B;'>"
+        f"Page {current_page} of {total_pages}"
+        f"</div>",
+        unsafe_allow_html=True
+    )
+
+    if col_next.button("Next ▶", key=f"{key_prefix}_next_btn", disabled=(current_page >= total_pages), use_container_width=True):
+        st.session_state[page_key] += 1
+        st.rerun()
+
+    return current_page, page_size
+
+
 

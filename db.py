@@ -50,7 +50,7 @@ SUPABASE_KEY = (
 
 _transport = SafeRetryTransport(
     max_retries=3,
-    limits=httpx.Limits(max_keepalive_connections=10, max_connections=20, keepalive_expiry=5.0)
+    limits=httpx.Limits(max_keepalive_connections=50, max_connections=100, keepalive_expiry=30.0)
 )
 _http_client = httpx.Client(
     transport=_transport,

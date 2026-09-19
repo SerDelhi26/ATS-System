@@ -174,12 +174,12 @@ else:
         st.Page("views/9_Talent_Mapping.py", title="Talent Mapping", icon="🗺️"),
         st.Page("views/6_Interview_Management.py", title="Interview Management", icon="📅"),
         st.Page("views/7_Offer_Management.py", title="Offer Management", icon="📄"),
-        st.Page("views/8_Report_Management.py", title="Report Management", icon="📈"),
     ]
 
-    # Only Admins get User Management
+    # Only Admins get User Management and Report Management (Hidden completely for Recruiters)
     if st.session_state.user_role == "Admin":
         pages_list.insert(1, st.Page("views/3_User_Management.py", title="User Management", icon="👥"))
+        pages_list.insert(2, st.Page("views/8_Report_Management.py", title="Report Management", icon="📈"))
 
     pages_list.append(st.Page("views/1_Change_Password.py", title="Change Password", icon="🔑"))
 
