@@ -1,6 +1,6 @@
 import streamlit as st
 from db import supabase
-from common import show_logout, show_job_notifications, show_user_profile, render_pagination, fetch_all_from_table
+from common import show_logout, show_job_notifications, show_user_profile, render_pagination, fetch_all_from_table, clear_data_cache
 from datetime import date, datetime
 from theme import apply_theme
 
@@ -43,24 +43,38 @@ st.markdown(
 
 # NO CACHE - Always fetches live data so it reacts to Interview Management instantly!
 def get_candidates_for_offer():
-
-    return (
-        supabase
-        .table("candidate_management")
-        .select(
-            """
-            candidate_id,
-            candidate_reference_no,
-            first_name,
-            last_name,
-            job_id,
-            current_stage,
-            created_by_user_id
-            """
-        )
-        .execute()
-        .data
-    )
+    all_data = []
+    chunk_size = 1000
+    start = 0
+    while True:
+        try:
+            res = (
+                supabase
+                .table("candidate_management")
+                .select(
+                    """
+                    candidate_id,
+                    candidate_reference_no,
+                    first_name,
+                    last_name,
+                    job_id,
+                    current_stage,
+                    created_by_user_id
+                    """
+                )
+                .in_("current_stage", ["Selected", "Offer", "Joined", "Rejected"])
+                .order("candidate_id", desc=True)
+                .range(start, start + chunk_size - 1)
+                .execute()
+            )
+            data = res.data or []
+            all_data.extend(data)
+            if len(data) < chunk_size:
+                break
+            start += chunk_size
+        except Exception:
+            break
+    return all_data
 
 
 @st.cache_data(ttl=15)
@@ -102,22 +116,35 @@ def get_jobs():
 
 # NO CACHE - Always fetches live data for the right-hand grid!
 def get_candidate_lookup():
-
-    return (
-        supabase
-        .table("candidate_management")
-        .select(
-            """
-            candidate_id,
-            candidate_reference_no,
-            first_name,
-            last_name,
-            current_stage
-            """
-        )
-        .execute()
-        .data
-    )
+    all_data = []
+    chunk_size = 1000
+    start = 0
+    while True:
+        try:
+            res = (
+                supabase
+                .table("candidate_management")
+                .select(
+                    """
+                    candidate_id,
+                    candidate_reference_no,
+                    first_name,
+                    last_name,
+                    current_stage
+                    """
+                )
+                .order("candidate_id", desc=True)
+                .range(start, start + chunk_size - 1)
+                .execute()
+            )
+            data = res.data or []
+            all_data.extend(data)
+            if len(data) < chunk_size:
+                break
+            start += chunk_size
+        except Exception:
+            break
+    return all_data
 
 def update_candidate_stage(
     candidate_id,
@@ -296,9 +323,9 @@ if st.session_state.edit_offer_id:
     )
 
     if offer:
-        # SECURITY CHECK: Only Admin or the Creator can edit
+        # SECURITY CHECK: Only Admin, Developer, or the Creator can edit
         if (
-            st.session_state.user_role == "Admin"
+            st.session_state.user_role in ["Admin", "Developer"]
             or offer.get("created_by_user_id") == st.session_state.user_id
         ):
             editing = True
@@ -364,11 +391,24 @@ with left_col:
 
     raw_candidates = get_candidates_for_offer()
     
-    # Add security filtering for the dropdown
-    if st.session_state.user_role != "Admin":
+    # Add security filtering for the dropdown (Admin, Developer, Candidate Creator, or Recruiter assigned to the job)
+    if st.session_state.user_role not in ["Admin", "Developer"]:
+        assigned_job_ids = set()
+        try:
+            assigned = (
+                supabase
+                .table("job_assignment")
+                .select("job_id")
+                .eq("user_id", st.session_state.user_id)
+                .execute()
+                .data or []
+            )
+            assigned_job_ids = {a["job_id"] for a in assigned}
+        except Exception:
+            pass
         raw_candidates = [
             c for c in raw_candidates 
-            if c.get("created_by_user_id") == st.session_state.user_id
+            if c.get("created_by_user_id") == st.session_state.user_id or c.get("job_id") in assigned_job_ids
         ]
     
     # ENHANCEMENT: Only show "Selected" candidates when scheduling new offers. 
@@ -605,6 +645,7 @@ with left_col:
             # 3. Make sure the job reverts back to open if they were "Joined" before deletion
             sync_job_status(selected_job_id)
             
+            clear_data_cache()
             st.session_state.offer_success_message = "Offer deleted successfully. Candidate reverted to 'Selected' stage."
             st.session_state.edit_offer_id = None
             st.session_state.form_reset_offer += 1
@@ -739,6 +780,7 @@ with left_col:
                 sync_job_status(selected_job_id)
 
                 # Advance Reset Tracker to clean the form
+                clear_data_cache()
                 st.session_state.form_reset_offer += 1
                 st.rerun()
 
@@ -993,7 +1035,7 @@ with right_col:
 
             # SECURITY CHECK: Determine if user is authorized to edit
             can_edit = False
-            if st.session_state.user_role == "Admin":
+            if st.session_state.user_role in ["Admin", "Developer"]:
                 can_edit = True
             elif item.get("created_by_user_id") == st.session_state.user_id:
                 can_edit = True

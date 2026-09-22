@@ -26,13 +26,15 @@ if not st.session_state.get(
 
 if st.session_state.get(
     "user_role"
-) != "Admin":
+) not in ["Admin", "Developer"]:
 
     st.error(
-        "Access Denied. Admin Only."
+        "Access Denied. Admin and Developer Only."
     )
 
     st.stop()
+
+is_developer = st.session_state.get("user_role") == "Developer"
    
 st.set_page_config(
     page_title="ATS System",
@@ -65,6 +67,19 @@ st.markdown(
 )
 
 if st.session_state.get("reset_user_id"):
+
+    # Security check: Admins cannot reset Developer passwords
+    target_pwd_user = (
+        supabase.table("users")
+        .select("role")
+        .eq("user_id", st.session_state.reset_user_id)
+        .execute()
+        .data
+    )
+    if target_pwd_user and target_pwd_user[0].get("role") == "Developer" and not is_developer:
+        st.session_state.reset_user_id = None
+        st.error("⛔ Unauthorized: Only a Developer can reset passwords for Developer accounts.")
+        st.stop()
 
     with st.expander(
         "Reset Password",
@@ -162,8 +177,14 @@ if st.session_state.edit_user_id:
 
     if response.data:
 
-        editing = True
-        user = response.data[0]
+        target_user = response.data[0]
+        if target_user.get("role") == "Developer" and not is_developer:
+            st.session_state.edit_user_id = None
+            st.error("⛔ Unauthorized: Only a Developer can modify a Developer account.")
+            st.rerun()
+        else:
+            editing = True
+            user = target_user
 
 # ==============================
 # PAGE LAYOUT
@@ -212,18 +233,20 @@ with left_col:
             type="password"
         )
 
+        if is_developer:
+            role_options = ["Recruiter", "Admin", "Developer"]
+        else:
+            role_options = ["Recruiter", "Admin"]
+
+        if editing and user.get("role") in role_options:
+            default_role_idx = role_options.index(user["role"])
+        else:
+            default_role_idx = 0
+
         role = st.selectbox(
             "Role",
-            ["Recruiter", "Admin"],
-            index=(
-                0
-                if not editing
-                else (
-                    0
-                    if user["role"] == "Recruiter"
-                    else 1
-                )
-            )
+            role_options,
+            index=default_role_idx
         )
 
         joining_date = st.date_input(
@@ -328,6 +351,10 @@ with left_col:
         # ==========================
 
         if submit_btn:
+
+            if role == "Developer" and not is_developer:
+                st.error("⛔ Unauthorized: Only a Developer can assign the Developer role.")
+                st.stop()
 
             email_pattern = (
                 r'^[\w\.-]+@[\w\.-]+\.\w+$'
@@ -499,7 +526,7 @@ with right_col:
     with col1:
         role_filter = st.selectbox(
             "Role Filter",
-            ["All", "Admin", "Recruiter"]
+            ["All", "Admin", "Recruiter", "Developer"]
         )
     with col2:
         status_filter = st.selectbox(
@@ -557,47 +584,58 @@ with right_col:
                         unsafe_allow_html=True
                     )
 
+                is_row_dev = row.get("role") == "Developer"
+
                 # Edit Button
-                if cols[5].button("✏️", key=f"edit_{row['user_id']}", help="Edit User"):
-                    st.session_state.edit_user_id = row["user_id"]
-                    st.rerun()
-
-                # Reset Password
-                if cols[6].button("🔑", key=f"reset_{row['user_id']}", help="Reset Password"):
-                    st.session_state.reset_user_id = row["user_id"]
-                    st.rerun()
-
-                # Active User
-                if row["status"] == "Active":
-                    if cols[7].button("🔒", key=f"deactivate_{row['user_id']}", help="Deactivate User"):
-                        (
-                            supabase
-                            .table("users")
-                            .update({
-                                "status": "Inactive",
-                                "relieving_date": str(date.today())
-                            })
-                            .eq("user_id", row["user_id"])
-                            .execute()
-                        )
-                        st.success(f"{row['full_name']} deactivated successfully.")
-                        st.cache_data.clear()
+                if is_developer or not is_row_dev:
+                    if cols[5].button("✏️", key=f"edit_{row['user_id']}", help="Edit User"):
+                        st.session_state.edit_user_id = row["user_id"]
                         st.rerun()
                 else:
-                    if cols[7].button("🔓", key=f"activate_{row['user_id']}", help="Activate User"):
-                        (
-                            supabase
-                            .table("users")
-                            .update({
-                                "status": "Active",
-                                "relieving_date": None
-                            })
-                            .eq("user_id", row["user_id"])
-                            .execute()
-                        )
-                        st.success(f"{row['full_name']} activated successfully.")
-                        st.cache_data.clear()
+                    cols[5].markdown("<div title='Only a Developer can edit Developer accounts' style='margin-top:2px; font-size:16px; cursor:help;'>🔒</div>", unsafe_allow_html=True)
+
+                # Reset Password
+                if is_developer or not is_row_dev:
+                    if cols[6].button("🔑", key=f"reset_{row['user_id']}", help="Reset Password"):
+                        st.session_state.reset_user_id = row["user_id"]
                         st.rerun()
+                else:
+                    cols[6].markdown("<div title='Only a Developer can reset Developer passwords' style='margin-top:2px; font-size:16px; cursor:help;'>🔒</div>", unsafe_allow_html=True)
+
+                # Active / Inactive User
+                if is_developer or not is_row_dev:
+                    if row["status"] == "Active":
+                        if cols[7].button("🔒", key=f"deactivate_{row['user_id']}", help="Deactivate User"):
+                            (
+                                supabase
+                                .table("users")
+                                .update({
+                                    "status": "Inactive",
+                                    "relieving_date": str(date.today())
+                                })
+                                .eq("user_id", row["user_id"])
+                                .execute()
+                            )
+                            st.success(f"{row['full_name']} deactivated successfully.")
+                            st.cache_data.clear()
+                            st.rerun()
+                    else:
+                        if cols[7].button("🔓", key=f"activate_{row['user_id']}", help="Activate User"):
+                            (
+                                supabase
+                                .table("users")
+                                .update({
+                                    "status": "Active",
+                                    "relieving_date": None
+                                })
+                                .eq("user_id", row["user_id"])
+                                .execute()
+                            )
+                            st.success(f"{row['full_name']} activated successfully.")
+                            st.cache_data.clear()
+                            st.rerun()
+                else:
+                    cols[7].markdown("<div title='Developer accounts cannot be deactivated by Admins' style='margin-top:2px; font-size:16px; cursor:help;'>🔒</div>", unsafe_allow_html=True)
         else:
             st.info("No employees found.")
 

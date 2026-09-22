@@ -63,8 +63,8 @@ with st.sidebar:
 st.markdown("# 📊 ATS Analytics Dashboard")
 st.caption(f"Welcome back, **{st.session_state.user_name}** ({st.session_state.user_role})")
 
-# Data Protection: Hide table download buttons & toolbars for non-Admin users
-if st.session_state.get("user_role") != "Admin":
+# Data Protection: Hide table download buttons & toolbars for non-Admin/Developer users
+if st.session_state.get("user_role") not in ["Admin", "Developer"]:
     st.markdown(
         """
         <style>
@@ -90,50 +90,76 @@ st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 # ==========================
 @st.cache_data(ttl=60)
 def get_dashboard_data():
-    jobs = fetch_all_from_table("job_management", select_fields="job_id, job_reference_no, job_status, openings, company_id, job_title_id, created_date, created_by")
-    candidates = fetch_all_live_candidates("candidate_id, candidate_reference_no, first_name, last_name, job_id, current_stage, candidate_status, created_by_name, created_on, updated_on, mobile_no, email, current_company, current_designation, experience_years, experience_months, current_ctc, expected_ctc, notice_period, remarks")
+    jobs = fetch_all_from_table("job_management", select_fields="job_id, job_reference_no, job_status, openings, company_id, job_title_id, created_date, modified_date, created_by")
+    candidates = fetch_all_live_candidates("candidate_id, candidate_reference_no, first_name, last_name, job_id, current_stage, candidate_status, created_by_name, created_by_user_id, created_on, updated_on, mobile_no, email, current_company, current_designation, experience_years, experience_months, current_ctc, expected_ctc, notice_period, remarks")
     interviews = fetch_all_from_table("interview_management", select_fields="interview_id, candidate_id, job_id, interview_round, interview_date, interview_status, feedback, created_by_name, created_on")
     offers = fetch_all_from_table("offer_management", select_fields="offer_id, candidate_id, job_id, offer_status, offered_ctc, joining_date, remarks, created_by_name, created_on")
-    recruiters = supabase.table("users").select("user_id, full_name").eq("role", "Recruiter").execute().data or []
+    all_users = supabase.table("users").select("user_id, full_name, role").execute().data or []
     job_titles = supabase.table("job_title_master").select("job_title_id, job_title_name").execute().data or []
     companies = supabase.table("company_master").select("company_id, company_name").execute().data or []
     job_assignments = supabase.table("job_assignment").select("job_id, user_id").execute().data or []
     
-    return jobs, candidates, interviews, offers, recruiters, job_titles, companies, job_assignments
+    return jobs, candidates, interviews, offers, all_users, job_titles, companies, job_assignments
 
-jobs, candidates, interviews, offers, recruiters, job_titles, companies, job_assignments = get_dashboard_data()
+jobs, candidates, interviews, offers, all_users, job_titles, companies, job_assignments = get_dashboard_data()
 
 # Lookups
+admin_uids = {u["user_id"] for u in all_users if u.get("role") in ["Admin", "Developer"]}
+admin_names = {u["full_name"].strip().lower() for u in all_users if u.get("role") in ["Admin", "Developer"]} | {"admin", "system admin", "administrator", "developer"}
+recruiters = [u for u in all_users if u.get("role") == "Recruiter"]
+recruiter_uids = {u["user_id"] for u in recruiters}
+recruiter_names_lower = {r["full_name"].strip().lower() for r in recruiters}
 job_title_lookup = {item["job_title_id"]: item["job_title_name"] for item in job_titles}
 company_lookup = {item["company_id"]: item["company_name"] for item in companies}
 recruiter_user_map = {r["full_name"]: r["user_id"] for r in recruiters}
 recruiter_id_to_name = {r["user_id"]: r["full_name"] for r in recruiters}
+job_status_lookup = {j["job_id"]: str(j.get("job_status") or "Open").strip() for j in jobs}
 offer_map = {o["candidate_id"]: o for o in offers if o.get("candidate_id")}
 
 job_lookup = {}
 all_job_labels_map = {}
 all_label_to_job_id = {}
 for job in jobs:
+    # Strictly only include Open jobs in lookups and dropdowns (exclude Closed, Hold, On Hold, Cancelled)
+    if str(job.get("job_status") or "").strip().lower() != "open":
+        continue
     title = job_title_lookup.get(job["job_title_id"], "Unknown")
     label = f"{job['job_reference_no']} | {title}"
     job_lookup[job["job_id"]] = label
     all_job_labels_map[job["job_id"]] = label
     all_label_to_job_id[label] = job["job_id"]
 
-# Build reciprocal mappings between Jobs and Recruiters
+# Build reciprocal mappings between Jobs and Recruiters (strictly only Recruiters, exclude Admins)
 job_id_to_rec_uids = {}
 for j in jobs:
     jid = j["job_id"]
-    uids = {ja["user_id"] for ja in job_assignments if ja.get("job_id") == jid}
-    if j.get("created_by"):
+    uids = {ja["user_id"] for ja in job_assignments if ja.get("job_id") == jid and ja.get("user_id") in recruiter_uids}
+    if j.get("created_by") and j.get("created_by") in recruiter_uids:
         uids.add(j["created_by"])
     job_id_to_rec_uids[jid] = uids
 
 rec_uid_to_job_ids = {}
 for r in recruiters:
     uid = r["user_id"]
-    jids = {j["job_id"] for j in jobs if j.get("created_by") == uid or any(ja.get("job_id") == j["job_id"] and ja.get("user_id") == uid for ja in job_assignments)}
+    jids = {j["job_id"] for j in jobs if (j.get("created_by") == uid or any(ja.get("job_id") == j["job_id"] and ja.get("user_id") == uid for ja in job_assignments))}
     rec_uid_to_job_ids[uid] = jids
+
+def get_candidate_recruiter_display(c):
+    # Strictly only return Recruiter name(s). Never return Admin names.
+    c_uid = safe_int(c.get("created_by_user_id"))
+    if not (c_uid and c_uid in admin_uids):
+        rec_name = (c.get("created_by_name") or "").strip()
+        if rec_name and rec_name.lower() in recruiter_names_lower and rec_name.lower() not in admin_names:
+            return rec_name
+    
+    # Fallback to recruiters assigned to the candidate's job
+    c_jid = safe_int(c.get("job_id"))
+    if c_jid:
+        assigned_recs = [recruiter_id_to_name[u] for u in job_id_to_rec_uids.get(c_jid, set()) if u in recruiter_id_to_name]
+        if assigned_recs:
+            return ", ".join(sorted(assigned_recs))
+            
+    return "Unassigned"
 
 def parse_date(date_val):
     if not date_val:
@@ -179,7 +205,7 @@ cur_job_filter = st.session_state.get("dash_job_select", "All Jobs")
 if cur_job_filter != "All Jobs" and cur_job_filter in all_label_to_job_id:
     target_job_id = all_label_to_job_id[cur_job_filter]
     allowed_rec_uids = job_id_to_rec_uids.get(target_job_id, set())
-    recruiter_options = ["All Recruiters"] + sorted([r["full_name"] for r in recruiters if r["user_id"] in allowed_rec_uids])
+    recruiter_options = ["All Recruiters"] + sorted([recruiter_id_to_name[uid] for uid in allowed_rec_uids if uid in recruiter_id_to_name])
 else:
     recruiter_options = ["All Recruiters"] + sorted([r["full_name"] for r in recruiters])
 
@@ -221,9 +247,11 @@ selected_job_id = all_label_to_job_id.get(job_filter) if job_filter != "All Jobs
 selected_rec_uid = recruiter_user_map.get(recruiter_filter) if recruiter_filter != "All Recruiters" else None
 rec_associated_job_ids = rec_uid_to_job_ids.get(selected_rec_uid, set()) if selected_rec_uid else set()
 
-# 1. Filter Jobs
+# 1. Filter Jobs (strictly only Open jobs - exclude Closed, Hold, On Hold, Cancelled)
 filtered_jobs = []
 for j in jobs:
+    if str(j.get("job_status") or "").strip().lower() != "open":
+        continue
     jid = j.get("job_id")
     job_created_date = parse_date(j.get("created_date"))
     
@@ -242,10 +270,12 @@ for j in jobs:
 
 filtered_job_ids = {j["job_id"] for j in filtered_jobs}
 
-# 2. Filter Candidates
+# 2. Filter Candidates (strictly only candidates on Open jobs)
 filtered_candidates = []
 for c in candidates:
     c_jid = safe_int(c.get("job_id"))
+    if c_jid and str(job_status_lookup.get(c_jid, "")).strip().lower() != "open":
+        continue
     cand_date = parse_date(c.get("created_on")) or parse_date(c.get("updated_on"))
     
     if use_date_filter and cand_date:
@@ -256,12 +286,11 @@ for c in candidates:
         continue
         
     if recruiter_filter != "All Recruiters":
-        c_rec_name = str(c.get("created_by_name") or "").strip().lower()
-        c_rec_id = safe_int(c.get("created_by_user_id"))
+        cand_rec = get_candidate_recruiter_display(c)
         req_rec_name = recruiter_filter.strip().lower()
+        cand_rec_list = [r.strip().lower() for r in cand_rec.split(",")]
         
-        is_creator = (c_rec_name == req_rec_name) or (selected_rec_uid is not None and c_rec_id == selected_rec_uid)
-        if not is_creator:
+        if req_rec_name not in cand_rec_list:
             continue
             
     filtered_candidates.append(c)
@@ -351,8 +380,12 @@ for recruiter in recruiters:
     if recruiter_filter != "All Recruiters" and r_name != recruiter_filter:
         continue
         
-    # Map performance by Candidate Creator (Ownership)
-    r_cands = [c for c in filtered_candidates if c.get("created_by_name") == r_name]
+    # Map performance by Candidate Creator or Assigned Job (only Recruiters)
+    r_cands = [
+        c for c in filtered_candidates 
+        if c.get("created_by_name") == r_name 
+        or (c.get("created_by_name", "").strip().lower() in admin_names and r_name in get_candidate_recruiter_display(c).split(", "))
+    ]
     
     pipeline_total = len(r_cands)
     shortlisted = len([c for c in r_cands if c.get("current_stage") == "Shortlisted" or c.get("candidate_status") == "Shortlisted"])
@@ -418,10 +451,33 @@ for iv in interviews:
             interview_cand_map[cid] = []
         interview_cand_map[cid].append(iv)
 
-radar_tab1, radar_tab2, radar_tab3 = st.tabs([
+# Pre-map candidate and interview activity per job for fast stagnancy evaluation
+cand_dates_by_job = {}
+cand_active_by_job = {}
+cand_total_by_job = {}
+for c in filtered_candidates:
+    c_jid = safe_int(c.get("job_id"))
+    if c_jid:
+        c_d = parse_date(c.get("updated_on") or c.get("created_on"))
+        if c_d:
+            cand_dates_by_job.setdefault(c_jid, []).append(c_d)
+        cand_total_by_job[c_jid] = cand_total_by_job.get(c_jid, 0) + 1
+        if (c.get("current_stage") or "").strip() in ["New", "Screening", "Shortlisted", "Interview", "Selected"]:
+            cand_active_by_job[c_jid] = cand_active_by_job.get(c_jid, 0) + 1
+
+iv_dates_by_job = {}
+for iv in interviews:
+    iv_jid = safe_int(iv.get("job_id"))
+    if iv_jid:
+        iv_d = parse_date(iv.get("interview_date") or iv.get("created_on"))
+        if iv_d:
+            iv_dates_by_job.setdefault(iv_jid, []).append(iv_d)
+
+radar_tab1, radar_tab2, radar_tab3, radar_tab4 = st.tabs([
     "👑 Ready for Offer",
     "⏳ Pending Acceptance & Joining",
-    "🚨 Stagnant / At-Risk Talent (>7 Days)"
+    "🚨 Stagnant / At-Risk Talent (>7 Days)",
+    "💼 Stagnant / At-Risk Jobs (>7 Days)"
 ])
 
 # ------------------------------------------------------------------------------
@@ -438,14 +494,25 @@ with radar_tab1:
         # Check if candidate is marked as Selected or cleared final interviews
         c_interviews = interview_cand_map.get(cid, [])
         has_selected_interview = any(iv.get("interview_status") == "Selected" for iv in c_interviews)
+        has_rejected_interview = any(iv.get("interview_status") == "Rejected" for iv in c_interviews)
         
         cand_offer = offer_map.get(cid)
         off_status = (cand_offer.get("offer_status") or "").strip() if cand_offer else ""
         
         is_selected = (c_stage in ["Selected", "Final Round", "Shortlisted"] or c_status in ["Selected", "Shortlisted"] or has_selected_interview)
         is_not_offered_yet = off_status not in ["Offered", "Offer Released", "Offer Accepted", "Joined", "Hired"]
-        is_not_rejected = c_status not in ["Rejected", "Offer Rejected", "Declined", "Cancelled", "Joined", "Hired"]
+        is_rejected = (
+            c_status in ["Rejected", "Offer Rejected", "Declined", "Cancelled"]
+            or c_stage in ["Rejected", "Offer Rejected", "Declined", "Cancelled"]
+            or off_status in ["Offer Rejected", "Declined", "Revoked"]
+            or has_rejected_interview
+        )
+        is_not_rejected = not is_rejected and c_status not in ["Joined", "Hired"] and c_stage not in ["Joined", "Hired"]
         
+        # Ensure candidate belongs to an active Open job
+        if str(job_status_lookup.get(c.get("job_id"), "")).strip().lower() != "open":
+            continue
+            
         if is_selected and is_not_offered_yet and is_not_rejected:
             # Calculate days since last update / creation
             act_date = parse_date(c.get("updated_on") or c.get("created_on"))
@@ -462,8 +529,16 @@ with radar_tab1:
             c_ctc = float(c.get("current_ctc")) if c.get("current_ctc") else None
             e_ctc = float(c.get("expected_ctc")) if c.get("expected_ctc") else None
             
+            rec_display = get_candidate_recruiter_display(c)
+            if recruiter_filter != "All Recruiters":
+                req_name = recruiter_filter.strip().lower()
+                c_recs = [r.strip().lower() for r in rec_display.split(",")]
+                if req_name not in c_recs:
+                    continue
+                rec_display = recruiter_filter
+
             ready_candidates.append({
-                "Recruiter": c.get("created_by_name") or "Unassigned",
+                "Recruiter": rec_display,
                 "Candidate Name": f"{c.get('first_name', '')} {c.get('last_name', '')}".strip() or "Unnamed",
                 "Target Role & Client": f"💼 {title_name} ({comp_name})",
                 "Current Stage": f"🌟 {c_stage or 'Selected'}",
@@ -519,8 +594,16 @@ with radar_tab2:
             
         is_in_offer_flight = off_status in ["Offered", "Offer Released", "Sent to Candidate", "Offer Sent", "Offer Accepted", "Offer"]
         is_not_joined = c_stage not in ["Joined", "Hired"] and c_status not in ["Joined", "Hired"]
-        is_not_declined = off_status not in ["Offer Rejected", "Declined", "Revoked"] and c_status not in ["Offer Rejected", "Declined"]
+        is_not_declined = (
+            off_status not in ["Offer Rejected", "Declined", "Revoked"]
+            and c_status not in ["Offer Rejected", "Declined", "Rejected"]
+            and c_stage not in ["Offer Rejected", "Declined", "Rejected"]
+        )
         
+        # Ensure candidate belongs to an active Open job
+        if str(job_status_lookup.get(c.get("job_id"), "")).strip().lower() != "open":
+            continue
+            
         if is_in_offer_flight and is_not_joined and is_not_declined:
             job_obj = job_obj_map.get(c.get("job_id"), {})
             title_name = job_title_lookup.get(job_obj.get("job_title_id"), "Role N/A")
@@ -544,8 +627,16 @@ with radar_tab2:
                 
             status_badge = "🟢 Offer Accepted (Joining Soon)" if "Accepted" in off_status else "🟡 Offer Released (Awaiting Response)"
             
+            rec_display = get_candidate_recruiter_display(c)
+            if recruiter_filter != "All Recruiters":
+                req_name = recruiter_filter.strip().lower()
+                c_recs = [r.strip().lower() for r in rec_display.split(",")]
+                if req_name not in c_recs:
+                    continue
+                rec_display = recruiter_filter
+
             pending_offers.append({
-                "Recruiter": c.get("created_by_name") or "Unassigned",
+                "Recruiter": rec_display,
                 "Candidate Name": f"{c.get('first_name', '')} {c.get('last_name', '')}".strip() or "Unnamed",
                 "Job & Client": f"💼 {title_name} ({comp_name})",
                 "Offer Stage": status_badge,
@@ -592,8 +683,16 @@ with radar_tab3:
         
         # Only active in-progress candidates
         is_in_pipeline = c_stage in ["New", "Screening", "Shortlisted", "Interview", "Selected"]
-        is_not_terminal = c_status not in ["Rejected", "Joined", "Hired", "Offer Rejected", "Declined", "Cancelled"]
+        is_not_terminal = (
+            c_status not in ["Rejected", "Joined", "Hired", "Offer Rejected", "Declined", "Cancelled"]
+            and c_stage not in ["Rejected", "Joined", "Hired", "Offer Rejected", "Declined", "Cancelled"]
+            and not any(iv.get("interview_status") == "Rejected" for iv in interview_cand_map.get(cid, []))
+        )
         
+        # Ensure candidate belongs to an active Open job
+        if str(job_status_lookup.get(c.get("job_id"), "")).strip().lower() != "open":
+            continue
+            
         if is_in_pipeline and is_not_terminal:
             act_date = parse_date(c.get("updated_on") or c.get("created_on"))
             days_inactive = (date.today() - act_date).days if act_date else 0
@@ -610,8 +709,16 @@ with radar_tab3:
                     delay_badge = f"🟡 {days_inactive} Days Inactive"
                     action_suggest = "⚠️ Schedule Interview / Log Feedback"
                     
+                rec_display = get_candidate_recruiter_display(c)
+                if recruiter_filter != "All Recruiters":
+                    req_name = recruiter_filter.strip().lower()
+                    c_recs = [r.strip().lower() for r in rec_display.split(",")]
+                    if req_name not in c_recs:
+                        continue
+                    rec_display = recruiter_filter
+
                 stagnant_candidates.append({
-                    "Recruiter": c.get("created_by_name") or "Unassigned",
+                    "Recruiter": rec_display,
                     "Candidate Name": f"{c.get('first_name', '')} {c.get('last_name', '')}".strip() or "Unnamed",
                     "Job & Client": f"💼 {title_name} ({comp_name})",
                     "Current Stage": c_stage or "Applied",
@@ -628,7 +735,7 @@ with radar_tab3:
         s_c1.metric("🚨 Stagnant Candidates (>7d)", len(stagnant_candidates))
         crit_count = len([s for s in stagnant_candidates if "🔴" in s["Stagnancy"]])
         s_c2.metric("🔴 Critical Delays (>14d)", crit_count)
-        stuck_recruiters = len(set(s["Recruiter"] for s in stagnant_candidates))
+        stuck_recruiters = len(set(s["Recruiter"] for s in stagnant_candidates if s["Recruiter"] != "Unassigned"))
         s_c3.metric("👥 Recruiters with Bottlenecks", stuck_recruiters)
         
         st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
@@ -645,24 +752,125 @@ with radar_tab3:
     else:
         st.success("🌟 Great job! No candidates are currently stagnant or delayed past 7 days.")
 
+# ------------------------------------------------------------------------------
+# TAB 4: STAGNANT / AT-RISK JOBS (>7 DAYS)
+# ------------------------------------------------------------------------------
+with radar_tab4:
+    stagnant_jobs = []
+    
+    for j in filtered_jobs:
+        # Strictly evaluate only Open jobs (not Closed, not Hold, not On Hold)
+        if str(j.get("job_status") or "").strip().lower() != "open":
+            continue
+            
+        jid = j.get("job_id")
+        
+        # Calculate days since last activity (job creation, modification, candidate submission, or interview)
+        job_dates = [
+            d for d in [parse_date(j.get("modified_date")), parse_date(j.get("created_date"))]
+            + cand_dates_by_job.get(jid, [])
+            + iv_dates_by_job.get(jid, [])
+            if d
+        ]
+        latest_act = max(job_dates) if job_dates else parse_date(j.get("created_date"))
+        days_inactive = (date.today() - latest_act).days if latest_act else 0
+        
+        if days_inactive >= 7:
+            title_name = job_title_lookup.get(j.get("job_title_id"), "Role N/A")
+            comp_name = company_lookup.get(j.get("company_id"), "Client N/A")
+            openings_val = safe_int(j.get("openings")) or 1
+            active_cnt = cand_active_by_job.get(jid, 0)
+            total_cand_cnt = cand_total_by_job.get(jid, 0)
+            
+            rec_names = [recruiter_id_to_name[u] for u in job_id_to_rec_uids.get(jid, set()) if u in recruiter_id_to_name]
+            
+            if recruiter_filter != "All Recruiters":
+                req_name = recruiter_filter.strip().lower()
+                rec_names_lower_list = [r.strip().lower() for r in rec_names]
+                if req_name not in rec_names_lower_list and j.get("created_by") != selected_rec_uid:
+                    continue
+                rec_display = recruiter_filter
+            else:
+                rec_display = ", ".join(sorted(rec_names)) if rec_names else "Unassigned"
+            
+            if days_inactive >= 14:
+                delay_badge = f"🔴 {days_inactive} Days Stalled"
+                if active_cnt == 0:
+                    action_suggest = "🚨 Critical: 0 Active Candidates - Urgent Sourcing"
+                else:
+                    action_suggest = "🚨 Urgent: Pipeline Stalled - Follow up with Client / Review Shortlist"
+            else:
+                delay_badge = f"🟡 {days_inactive} Days Inactive"
+                if active_cnt == 0:
+                    action_suggest = "⚠️ No Active Sourcing - Add Candidates"
+                else:
+                    action_suggest = "⚠️ Advance Candidates / Schedule Interviews"
+                    
+            stagnant_jobs.append({
+                "Recruiter(s)": rec_display,
+                "Job Ref No": j.get("job_reference_no", "N/A"),
+                "Target Role & Client": f"💼 {title_name} ({comp_name})",
+                "Openings": openings_val,
+                "Active Pipeline": f"👥 {active_cnt} Active ({total_cand_cnt} Total)",
+                "Stagnancy": delay_badge,
+                "Recommended Action": action_suggest,
+                "Last Activity": f"⏱️ {days_inactive} days ago" if days_inactive > 0 else "Today",
+                "_days_num": days_inactive,
+                "_openings": openings_val
+            })
+
+    if stagnant_jobs:
+        df_stagnant_jobs = pd.DataFrame(stagnant_jobs).sort_values(by="_days_num", ascending=False).drop(columns=["_days_num", "_openings"])
+        
+        j_c1, j_c2, j_c3 = st.columns(3)
+        j_c1.metric("🚨 Stagnant Jobs (>7d)", len(stagnant_jobs))
+        crit_job_count = len([sj for sj in stagnant_jobs if "🔴" in sj["Stagnancy"]])
+        j_c2.metric("🔴 Critical Delays (>14d)", crit_job_count)
+        vacancies_at_risk = sum(sj["_openings"] for sj in stagnant_jobs)
+        j_c3.metric("🎯 Total Vacancies at Risk", vacancies_at_risk)
+        
+        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+        st.dataframe(
+            df_stagnant_jobs,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Job Ref No": st.column_config.TextColumn("Job Ref No", width="small"),
+                "Target Role & Client": st.column_config.TextColumn("Target Role & Client", width="large"),
+                "Openings": st.column_config.NumberColumn("Openings", format="%d", width="small"),
+                "Active Pipeline": st.column_config.TextColumn("Pipeline", width="medium"),
+                "Recommended Action": st.column_config.TextColumn("Action Required", width="large"),
+                "Last Activity": st.column_config.TextColumn("Last Activity", width="medium")
+            }
+        )
+    else:
+        st.success("🌟 Outstanding! No open jobs are currently stagnant or delayed past 7 days.")
+
 
 # ==========================
 # USER WORKPLAN SECTION
 # ==========================
 st.divider()
 st.markdown("### 📋 User Workplan")
-st.caption("Active job requirements assigned to you and their current candidate pipeline breakdown.")
+
+if recruiter_filter != "All Recruiters":
+    st.caption(f"Active job requirements and candidate pipeline breakdown for **{recruiter_filter}**.")
+else:
+    st.caption("Active job requirements assigned to you and their current candidate pipeline breakdown.")
 
 current_user_id = st.session_state.get("user_id")
 current_user_role = st.session_state.get("user_role")
 
-# Determine job assignments based on role
-assigned_job_ids = [a["job_id"] for a in job_assignments if a.get("user_id") == current_user_id]
-
-if current_user_role == "Admin":
-    workplan_jobs = [j for j in filtered_jobs if j.get("job_status") == "Open"]
+# Determine job assignments based on role or selected recruiter filter
+if recruiter_filter != "All Recruiters":
+    target_rec_uid = recruiter_user_map.get(recruiter_filter)
+    target_job_ids = rec_uid_to_job_ids.get(target_rec_uid, set()) | {c.get("job_id") for c in filtered_candidates if c.get("job_id")}
+    workplan_jobs = [j for j in filtered_jobs if str(j.get("job_status") or "").strip().lower() == "open" and j.get("job_id") in target_job_ids]
+elif current_user_role in ["Admin", "Developer"]:
+    workplan_jobs = [j for j in filtered_jobs if str(j.get("job_status") or "").strip().lower() == "open"]
 else:
-    workplan_jobs = [j for j in filtered_jobs if j.get("job_status") == "Open" and j.get("job_id") in assigned_job_ids]
+    assigned_job_ids = [a["job_id"] for a in job_assignments if a.get("user_id") == current_user_id]
+    workplan_jobs = [j for j in filtered_jobs if str(j.get("job_status") or "").strip().lower() == "open" and j.get("job_id") in assigned_job_ids]
 
 workplan_data = []
 
@@ -673,6 +881,13 @@ for job in workplan_jobs:
     job_label = f"{job.get('job_reference_no', '')} | {title_name}"
     
     openings = int(job.get("openings", 1))
+
+    # Recruiter display for this job
+    rec_names = [recruiter_id_to_name[u] for u in job_id_to_rec_uids.get(j_id, set()) if u in recruiter_id_to_name]
+    if recruiter_filter != "All Recruiters":
+        rec_display = recruiter_filter
+    else:
+        rec_display = ", ".join(sorted(rec_names)) if rec_names else "Unassigned"
 
     # Filter candidate data per job
     job_cands = [c for c in filtered_candidates if c.get("job_id") == j_id]
@@ -724,6 +939,7 @@ for job in workplan_jobs:
                 latest_date = c_date
 
     workplan_data.append({
+        "Recruiter": rec_display,
         "Job Requirement": job_label,
         "Company": company_name,
         "No Of Opening": openings,
@@ -746,6 +962,7 @@ if not workplan_df.empty:
         use_container_width=True,
         hide_index=True,
         column_config={
+            "Recruiter": st.column_config.TextColumn("Recruiter", width="small"),
             "Job Requirement": st.column_config.TextColumn("Job Requirement", width="medium"),
             "Company": st.column_config.TextColumn("Company", width="small"),
             "No Of Opening": st.column_config.NumberColumn("No Of Opening", format="%d"),

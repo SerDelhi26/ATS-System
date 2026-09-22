@@ -18,7 +18,7 @@ if not st.session_state.get("logged_in", False):
     st.stop()
 
 # Determine user access level
-is_admin = str(st.session_state.get("user_role", "")).lower() == "admin"
+is_admin = str(st.session_state.get("user_role", "")).lower() in ["admin", "developer"]
 
 st.set_page_config(
     page_title="Job Management",

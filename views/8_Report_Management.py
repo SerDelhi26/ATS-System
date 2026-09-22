@@ -3,7 +3,7 @@ import pandas as pd
 from io import BytesIO
 from datetime import date, datetime
 from db import supabase
-from common import show_logout, show_job_notifications, show_user_profile
+from common import show_logout, show_job_notifications, show_user_profile, fetch_all_from_table
 from theme import apply_theme
 
 # ==========================
@@ -13,8 +13,8 @@ if not st.session_state.get("logged_in", False):
     st.switch_page("Home.py")
     st.stop()
 
-if st.session_state.get("user_role") != "Admin":
-    st.error("⛔ Access Denied: Report Management is restricted to Admin users.")
+if st.session_state.get("user_role") not in ["Admin", "Developer"]:
+    st.error("⛔ Access Denied: Report Management is restricted to Admin and Developer users.")
     st.stop()
 
 # ==========================
@@ -41,15 +41,16 @@ st.markdown("# 📊 ATS Master Report")
 def get_report_data():
     try:
         # Fetch only necessary columns to keep network payloads lightweight
-        candidates = supabase.table("candidate_management").select("candidate_id, candidate_reference_no, first_name, last_name, job_id, created_by_name, email, mobile_no, experience_years, experience_months, current_stage, created_on").execute().data or []
-        jobs = supabase.table("job_management").select("job_id, job_reference_no, job_title_id").execute().data or []
+        candidates = fetch_all_from_table("candidate_management", select_fields="candidate_id, candidate_reference_no, first_name, last_name, job_id, created_by_name, email, mobile_no, experience_years, experience_months, current_stage, created_on", order_by="candidate_id", desc=True)
+        jobs = supabase.table("job_management").select("job_id, job_reference_no, job_title_id, job_status").execute().data or []
         job_titles = supabase.table("job_title_master").select("job_title_id, job_title_name").execute().data or []
         interviews = supabase.table("interview_management").select("candidate_id, interview_round, interview_status, interview_date").execute().data or []
         offers = supabase.table("offer_management").select("candidate_id, offer_status, offered_ctc, joining_date").execute().data or []
+        users = supabase.table("users").select("user_id, full_name, role").execute().data or []
         
-        return candidates, jobs, job_titles, interviews, offers
+        return candidates, jobs, job_titles, interviews, offers, users
     except Exception as e:
-        return [], [], [], [], []
+        return [], [], [], [], [], []
 
 def parse_date(date_str):
     if not date_str:
@@ -64,7 +65,7 @@ def parse_date(date_str):
 # ==========================
 # LOAD DATA
 # ==========================
-candidates, jobs, job_titles, interviews, offers = get_report_data()
+candidates, jobs, job_titles, interviews, offers, users = get_report_data()
 
 if candidates:
     st.caption(f"Total candidates in database: {len(candidates)}")
@@ -79,6 +80,8 @@ job_title_lookup = {row["job_title_id"]: row["job_title_name"] for row in job_ti
 job_lookup = {}
 job_options = ["All Jobs"]
 for job in jobs:
+    if str(job.get("job_status") or "").strip().lower() != "open":
+        continue
     title = job_title_lookup.get(job["job_title_id"], "Unknown")
     label = f"{job['job_reference_no']} | {title}"
     job_lookup[job["job_id"]] = label
@@ -100,6 +103,9 @@ for off in offers:
     if cid:
         offer_map[cid] = off
 
+# User lookups
+admin_names = {u["full_name"].strip().lower() for u in users if u.get("role") in ["Admin", "Developer"]} | {"admin", "system admin", "administrator", "developer"}
+
 # ==========================
 # FILTERS UI
 # ==========================
@@ -107,10 +113,10 @@ st.markdown("### 🔍 Filter Criteria")
 
 col1, col2, col3, col4, col5, col6 = st.columns([2, 2, 2, 2, 2, 1])
 
-recruiter_options = ["All Recruiters"]
-recruiter_options.extend(
-    sorted(list({row.get("created_by_name") for row in candidates if row.get("created_by_name")}))
-)
+recruiter_options = ["All Recruiters"] + sorted(list({
+    row.get("created_by_name") for row in candidates 
+    if row.get("created_by_name") and row.get("created_by_name").strip().lower() not in admin_names
+}))
 
 status_options = [
     "All Stages", "New", "Screening", "Shortlisted", "Interview", "Selected", "Offer", "Joined", "Rejected"
@@ -144,7 +150,11 @@ for candidate in candidates:
         if not parsed_date or parsed_date < from_date or parsed_date > to_date:
             continue
 
-    if recruiter_filter != "All Recruiters" and candidate.get("created_by_name") != recruiter_filter:
+    cand_rec = candidate.get("created_by_name", "")
+    if not cand_rec or cand_rec.strip().lower() in admin_names:
+        cand_rec = "Unassigned"
+
+    if recruiter_filter != "All Recruiters" and cand_rec != recruiter_filter:
         continue
 
     master_stage = candidate.get("current_stage", "Unknown")
@@ -181,7 +191,7 @@ for candidate in candidates:
         "Candidate No": candidate.get("candidate_reference_no", ""),
         "Candidate Name": f"{candidate.get('first_name','')} {candidate.get('last_name','')}".strip(),
         "Job": job_label,
-        "Recruiter": candidate.get("created_by_name", ""),
+        "Recruiter": cand_rec,
         "Email": candidate.get("email", ""),
         "Mobile": candidate.get("mobile_no", ""),
         "Experience": f"{candidate.get('experience_years',0)}Y {candidate.get('experience_months',0)}M",

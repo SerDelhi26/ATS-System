@@ -176,10 +176,15 @@ else:
         st.Page("views/7_Offer_Management.py", title="Offer Management", icon="📄"),
     ]
 
-    # Only Admins get User Management and Report Management (Hidden completely for Recruiters)
-    if st.session_state.user_role == "Admin":
+    # Admins and Developers get User Management and Report Management (Hidden completely for Recruiters)
+    if st.session_state.user_role in ["Admin", "Developer"]:
         pages_list.insert(1, st.Page("views/3_User_Management.py", title="User Management", icon="👥"))
         pages_list.insert(2, st.Page("views/8_Report_Management.py", title="Report Management", icon="📈"))
+
+    # Future Developer-exclusive modules hook
+    if st.session_state.user_role == "Developer":
+        # Future developer-exclusive modules will be attached here
+        pass
 
     pages_list.append(st.Page("views/1_Change_Password.py", title="Change Password", icon="🔑"))
 

@@ -1,6 +1,6 @@
 import streamlit as st
 from db import supabase
-from common import show_logout, show_job_notifications, show_user_profile, render_pagination, fetch_all_from_table
+from common import show_logout, show_job_notifications, show_user_profile, render_pagination, fetch_all_from_table, clear_data_cache
 from datetime import date, datetime
 from theme import apply_theme
 
@@ -46,24 +46,39 @@ st.markdown(
 
 # NO CACHE - We must fetch live data so the grid instantly locks when HR creates an Offer!
 def get_candidates_for_interview():
-    return (
-        supabase
-        .table("candidate_management")
-        .select(
-            """
-            candidate_id,
-            candidate_reference_no,
-            first_name,
-            last_name,
-            job_id,
-            current_stage,
-            candidate_status,
-            created_by_user_id
-            """
-        )
-        .execute()
-        .data
-    )
+    all_data = []
+    chunk_size = 1000
+    start = 0
+    while True:
+        try:
+            res = (
+                supabase
+                .table("candidate_management")
+                .select(
+                    """
+                    candidate_id,
+                    candidate_reference_no,
+                    first_name,
+                    last_name,
+                    job_id,
+                    current_stage,
+                    candidate_status,
+                    created_by_user_id
+                    """
+                )
+                .or_("candidate_status.eq.Shortlisted,current_stage.in.(Interview,Selected,Rejected,Offer,Joined)")
+                .order("candidate_id", desc=True)
+                .range(start, start + chunk_size - 1)
+                .execute()
+            )
+            data = res.data or []
+            all_data.extend(data)
+            if len(data) < chunk_size:
+                break
+            start += chunk_size
+        except Exception:
+            break
+    return all_data
 
 
 @st.cache_data(ttl=15)
@@ -106,22 +121,35 @@ def get_jobs():
 
 # NO CACHE - Ensure the right-hand grid always has the live current_stage for locking
 def get_candidate_lookup():
-
-    return (
-        supabase
-        .table("candidate_management")
-        .select(
-            """
-            candidate_id,
-            candidate_reference_no,
-            first_name,
-            last_name,
-            current_stage
-            """
-        )
-        .execute()
-        .data
-    )
+    all_data = []
+    chunk_size = 1000
+    start = 0
+    while True:
+        try:
+            res = (
+                supabase
+                .table("candidate_management")
+                .select(
+                    """
+                    candidate_id,
+                    candidate_reference_no,
+                    first_name,
+                    last_name,
+                    current_stage
+                    """
+                )
+                .order("candidate_id", desc=True)
+                .range(start, start + chunk_size - 1)
+                .execute()
+            )
+            data = res.data or []
+            all_data.extend(data)
+            if len(data) < chunk_size:
+                break
+            start += chunk_size
+        except Exception:
+            break
+    return all_data
 
 
 def update_candidate_stage(
@@ -264,9 +292,9 @@ if st.session_state.edit_interview_id:
     )
 
     if interview:
-        # SECURITY CHECK: Only Admin or the Creator can edit
+        # SECURITY CHECK: Only Admin, Developer, or the Creator can edit
         if (
-            st.session_state.user_role == "Admin"
+            st.session_state.user_role in ["Admin", "Developer"]
             or interview.get("created_by_user_id") == st.session_state.user_id
         ):
             editing = True
@@ -338,9 +366,25 @@ with left_col:
 
     raw_candidates = get_candidates_for_interview()
     
-    # Add security filtering for the dropdown
-    if st.session_state.user_role != "Admin":
-        raw_candidates = [c for c in raw_candidates if c.get("created_by_user_id") == st.session_state.user_id]
+    # Add security filtering for the dropdown (Admin, Developer, Candidate Creator, or Recruiter assigned to the job)
+    if st.session_state.user_role not in ["Admin", "Developer"]:
+        assigned_job_ids = set()
+        try:
+            assigned = (
+                supabase
+                .table("job_assignment")
+                .select("job_id")
+                .eq("user_id", st.session_state.user_id)
+                .execute()
+                .data or []
+            )
+            assigned_job_ids = {a["job_id"] for a in assigned}
+        except Exception:
+            pass
+        raw_candidates = [
+            c for c in raw_candidates 
+            if c.get("created_by_user_id") == st.session_state.user_id or c.get("job_id") in assigned_job_ids
+        ]
 
     # Dynamic python filtering for candidate dropdown
     if not editing:
@@ -812,6 +856,7 @@ with left_col:
                     st.session_state.interview_success_message = "Interview Scheduled Successfully."
                 
                 # Advance Reset Tracker to clean the form
+                clear_data_cache()
                 st.session_state.form_reset_interview += 1
                 st.rerun()
 
@@ -1169,7 +1214,7 @@ with right_col:
 
             # SECURITY CHECK: Determine if the logged-in user has edit rights
             can_edit = False
-            if st.session_state.user_role == "Admin":
+            if st.session_state.user_role in ["Admin", "Developer"]:
                 can_edit = True
             elif item.get("created_by_user_id") == st.session_state.user_id:
                 can_edit = True
