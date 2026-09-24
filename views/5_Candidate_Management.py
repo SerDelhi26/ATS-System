@@ -777,7 +777,9 @@ with left_col:
         key=get_key("skills")
     )
 
-    candidate_status_options = [
+    is_admin_or_dev = st.session_state.get("user_role") in ["Admin", "Developer"]
+
+    admin_candidate_status_options = [
         "New",
         "Screening",
         "Shortlisted",
@@ -795,19 +797,53 @@ with left_col:
         "Blacklisted"
     ]
 
-    candidate_status = st.selectbox(
-        "Candidate Status",
-        candidate_status_options,
-        index=(
-            candidate_status_options.index(
-                candidate["candidate_status"]
-            )
-            if editing
-            and candidate["candidate_status"] in candidate_status_options
-            else 0
-        ),
-        key=get_key("status")
-    )
+    recruiter_candidate_status_options = [
+        "New",
+        "Screening",
+        "Shortlisted",
+        "Rejected",
+        "Hold"
+    ]
+
+    cand_existing_status = str(candidate.get("candidate_status") or "").strip() if (editing and candidate) else ""
+    cand_existing_stage = str(candidate.get("current_stage") or "").strip() if (editing and candidate) else ""
+
+    # Advanced stages where candidate has progressed into interview, offer, joining, or deactivation
+    downstream_stages = ["Interview", "Selected", "Offer", "Joined"]
+    downstream_statuses = [
+        "Selected", "Offer Released", "Offer Accepted", "Offer Rejected", 
+        "Hired", "Joined", "No Show", "Retired", "Deceased", "Inactive / Left Market", "Blacklisted"
+    ]
+    is_advanced_candidate = editing and (cand_existing_stage in downstream_stages or cand_existing_status in downstream_statuses)
+
+    if not is_admin_or_dev and is_advanced_candidate:
+        # Candidate has advanced beyond recruiter screening stages -> Lock status display to prevent stage regression
+        display_status = cand_existing_status or cand_existing_stage
+        candidate_status = display_status
+        st.text_input(
+            "Candidate Status",
+            value=f"{display_status} (Pipeline Stage: {cand_existing_stage or display_status})",
+            disabled=True,
+            help="Candidate has progressed to Interview/Offer pipeline. Stage progression is managed in Interview & Offer Management.",
+            key=get_key("status_locked")
+        )
+        st.caption("🔒 *Candidate is currently in Interview / Offer pipeline. Pipeline status is managed in Interview & Offer Management.*")
+    else:
+        status_options = admin_candidate_status_options if is_admin_or_dev else recruiter_candidate_status_options
+        
+        # Calculate safe default index
+        target_status = cand_existing_status or get_val("candidate_status", "New")
+        if target_status in status_options:
+            default_index = status_options.index(target_status)
+        else:
+            default_index = 0
+
+        candidate_status = st.selectbox(
+            "Candidate Status",
+            status_options,
+            index=default_index,
+            key=get_key("status")
+        )
 
     remarks = st.text_area(
         "Remarks",
@@ -1346,16 +1382,46 @@ with left_col:
                 "skills":
                     skills.strip(),
 
-                "candidate_status":
-                    candidate_status,
-                    
-                "current_stage":
-                    candidate_status,   # <-- Keeps stages in sync upon initial creation/edit
-
                 "remarks":
                     remarks.strip()
 
             }
+
+            # ==========================
+            # STAGE-PROTECTION GUARD
+            # ==========================
+            is_admin_or_dev = st.session_state.get("user_role") in ["Admin", "Developer"]
+
+            if editing:
+                existing_stage = str(candidate.get("current_stage") or "").strip()
+                existing_status = str(candidate.get("candidate_status") or "").strip()
+
+                # Guard 1: Non-Admin (Recruiter) editing an advanced candidate -> preserve stage & status
+                if not is_admin_or_dev and (existing_stage in ["Interview", "Selected", "Offer", "Joined"] or existing_status in ["Selected", "Offer Released", "Offer Accepted", "Offer Rejected", "Hired", "Joined", "No Show"]):
+                    candidate_data["candidate_status"] = existing_status or candidate_status
+                    candidate_data["current_stage"] = existing_stage or existing_status or candidate_status
+                elif is_admin_or_dev:
+                    candidate_data["candidate_status"] = candidate_status
+                    # If status was unchanged and candidate is already in downstream stage, keep current_stage
+                    if candidate_status == existing_status and existing_stage in ["Interview", "Selected", "Offer", "Joined"]:
+                        candidate_data["current_stage"] = existing_stage
+                    else:
+                        stage_map = {
+                            "Offer Released": "Offer",
+                            "Offer Accepted": "Offer",
+                            "Offer Rejected": "Rejected",
+                            "Hired": "Joined",
+                            "Joined": "Joined"
+                        }
+                        candidate_data["current_stage"] = stage_map.get(candidate_status, candidate_status)
+                else:
+                    # Standard recruiter edit on initial screening candidate
+                    candidate_data["candidate_status"] = candidate_status
+                    candidate_data["current_stage"] = candidate_status
+            else:
+                # Initial candidate creation
+                candidate_data["candidate_status"] = candidate_status
+                candidate_data["current_stage"] = candidate_status
 
             # Extract category & job ref for folder hierarchy
             job_ref = selected_job_record.get("job_reference_no", "General_Job")
