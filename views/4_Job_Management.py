@@ -13,7 +13,9 @@ from common import (
     fetch_all_legacy_candidates,
     fetch_all_live_candidates,
     fetch_all_from_table,
-    clear_data_cache
+    clear_data_cache,
+    get_master_lookups,
+    get_unified_candidate_pool
 )
 
 try:
