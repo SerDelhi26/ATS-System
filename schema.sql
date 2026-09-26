@@ -387,3 +387,30 @@ CREATE INDEX IF NOT EXISTS idx_cand_trgm_name ON public.candidate_management USI
 CREATE INDEX IF NOT EXISTS idx_cand_trgm_company ON public.candidate_management USING gin (current_company gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_cand_trgm_skills ON public.candidate_management USING gin (skills gin_trgm_ops);
 
+-- ====================================================================
+-- 13. SECURITY: ROW LEVEL SECURITY (RLS) & ACCESS CONTROL
+-- Enables RLS on all tables to lock out unauthorized public/anon access.
+-- The ATS server-side application connects via SUPABASE_SERVICE_ROLE_KEY.
+-- ====================================================================
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.candidate_management ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.job_management ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.interview_management ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.offer_management ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.job_assignment ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.company_master ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.category_master ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.sub_category_master ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.job_title_master ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.legacy_candidates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.talent_mapping ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow public select legacy_candidates" ON public.legacy_candidates;
+DROP POLICY IF EXISTS "Allow public insert legacy_candidates" ON public.legacy_candidates;
+DROP POLICY IF EXISTS "Allow public update legacy_candidates" ON public.legacy_candidates;
+DROP POLICY IF EXISTS "Allow public select talent_mapping" ON public.talent_mapping;
+DROP POLICY IF EXISTS "Allow public insert talent_mapping" ON public.talent_mapping;
+DROP POLICY IF EXISTS "Allow public update talent_mapping" ON public.talent_mapping;
+DROP POLICY IF EXISTS "Allow public delete talent_mapping" ON public.talent_mapping;
+
+

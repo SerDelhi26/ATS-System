@@ -1,6 +1,6 @@
 import streamlit as st
 from db import supabase
-from common import show_logout, show_job_notifications, show_user_profile, render_pagination, fetch_all_from_table, clear_data_cache
+from common import show_logout, show_job_notifications, show_user_profile, render_pagination, render_paginated_section, fetch_all_from_table, clear_data_cache
 from datetime import date, datetime
 from theme import apply_theme
 
@@ -119,6 +119,19 @@ def get_jobs():
         .data or []
     )
 
+@st.cache_data(ttl=30)
+def get_all_users():
+    try:
+        return (
+            supabase
+            .table("users")
+            .select("user_id, full_name, role, status")
+            .execute()
+            .data or []
+        )
+    except Exception:
+        return []
+
 # NO CACHE - Ensure the right-hand grid always has the live current_stage for locking
 def get_candidate_lookup():
     all_data = []
@@ -135,7 +148,9 @@ def get_candidate_lookup():
                     candidate_reference_no,
                     first_name,
                     last_name,
-                    current_stage
+                    current_stage,
+                    created_by_name,
+                    created_by_user_id
                     """
                 )
                 .order("candidate_id", desc=True)
@@ -261,6 +276,12 @@ job_display_lookup = {
 job_status_lookup = {
     job["job_id"]: job.get("job_status", "Open")
     for job in jobs
+}
+
+all_users = get_all_users()
+user_name_lookup = {
+    u["user_id"]: u["full_name"]
+    for u in all_users
 }
 
 
@@ -856,7 +877,7 @@ with left_col:
                     st.session_state.interview_success_message = "Interview Scheduled Successfully."
                 
                 # Advance Reset Tracker to clean the form
-                clear_data_cache()
+                clear_data_cache("candidates")
                 st.session_state.form_reset_interview += 1
                 st.rerun()
 
@@ -878,13 +899,63 @@ with right_col:
     )
 
     # --------------------------
-    # INTERVIEW DATA
+    # CANDIDATE LOOKUP
+    # --------------------------
+
+    all_candidates = get_candidate_lookup()
+
+    candidate_lookup = {
+        candidate["candidate_id"]:
+        f"{candidate['candidate_reference_no']} | "
+        f"{candidate['first_name']} "
+        f"{candidate['last_name']}"
+        for candidate in all_candidates
+    }
+
+    candidate_creator_lookup = {
+        candidate["candidate_id"]: (
+            candidate.get("created_by_name")
+            or user_name_lookup.get(candidate.get("created_by_user_id"), "")
+        )
+        for candidate in all_candidates
+    }
+
+    candidate_creator_id_lookup = {
+        candidate["candidate_id"]: candidate.get("created_by_user_id")
+        for candidate in all_candidates
+    }
+
+    # Tracking Candidate Stages for Locking rows
+    candidate_stage_lookup = {
+        candidate["candidate_id"]: candidate.get("current_stage")
+        for candidate in all_candidates
+    }
+
+    # --------------------------
+    # INTERVIEW DATA & ROLE ACCESS
     # --------------------------
 
     interviews = fetch_all_from_table("interview_management", select_fields="*", order_by="interview_id", desc=True)
 
-    # --- UPDATED: 3-Column layout for filters ---
-    filter_col1, filter_col2, filter_col3 = st.columns(3)
+    is_admin = st.session_state.user_role in ["Admin", "Developer"]
+
+    # Security check: Recruiters only see their own interview records
+    if not is_admin:
+        current_uid = st.session_state.user_id
+        current_name = st.session_state.user_name
+        interviews = [
+            item for item in interviews
+            if item.get("created_by_user_id") == current_uid
+            or item.get("created_by_name") == current_name
+            or candidate_creator_lookup.get(item.get("candidate_id")) == current_name
+            or candidate_creator_id_lookup.get(item.get("candidate_id")) == current_uid
+        ]
+
+    # --- Filter layout: 4 columns for Admin/Developer, 3 columns for Recruiter ---
+    if is_admin:
+        filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
+    else:
+        filter_col1, filter_col2, filter_col3 = st.columns(3)
 
     with filter_col1:
 
@@ -936,35 +1007,33 @@ with right_col:
             ["All Jobs"] + all_jobs_in_interviews
         )
 
+    recruiter_filter = "All Recruiters"
+    if is_admin:
+        with filter_col4:
+            active_recruiters = [
+                u["full_name"]
+                for u in all_users
+                if u.get("role") == "Recruiter" and u.get("status") == "Active"
+            ]
+            interview_recruiters = {
+                item["created_by_name"]
+                for item in interviews
+                if item.get("created_by_name")
+            }
+            all_recruiter_options = sorted(list(set(active_recruiters) | interview_recruiters))
+            recruiter_filter = st.selectbox(
+                "Recruiter",
+                ["All Recruiters"] + all_recruiter_options
+            )
+
     search_text = st.text_input(
         "🔍 Search Interview",
-        placeholder=
-        "Candidate, CAN No, Job No or Interviewer"
+        placeholder=(
+            "Candidate, CAN No, Job No, Interviewer or Recruiter"
+            if is_admin
+            else "Candidate, CAN No, Job No or Interviewer"
+        )
     )
-
-    # --------------------------
-    # CANDIDATE LOOKUP
-    # --------------------------
-
-    all_candidates = get_candidate_lookup()
-
-    candidate_lookup = {
-
-        candidate["candidate_id"]:
-
-        f"{candidate['candidate_reference_no']} | "
-        f"{candidate['first_name']} "
-        f"{candidate['last_name']}"
-
-        for candidate in all_candidates
-
-    }
-
-    # Tracking Candidate Stages for Locking rows
-    candidate_stage_lookup = {
-        candidate["candidate_id"]: candidate.get("current_stage")
-        for candidate in all_candidates
-    }
 
     # --------------------------
     # STATUS FILTER
@@ -1017,6 +1086,26 @@ with right_col:
         ]
 
     # --------------------------
+    # RECRUITER FILTER (ADMIN / DEVELOPER ONLY)
+    # --------------------------
+
+    if is_admin and recruiter_filter != "All Recruiters":
+
+        interviews = [
+
+            item
+
+            for item in interviews
+
+            if (
+                item.get("created_by_name") == recruiter_filter
+                or user_name_lookup.get(item.get("created_by_user_id")) == recruiter_filter
+                or candidate_creator_lookup.get(item.get("candidate_id")) == recruiter_filter
+            )
+
+        ]
+
+    # --------------------------
     # SEARCH
     # --------------------------
 
@@ -1040,6 +1129,12 @@ with right_col:
                 )
             )
 
+            recruiter_name = (
+                item.get("created_by_name")
+                or user_name_lookup.get(item.get("created_by_user_id"), "")
+                or candidate_creator_lookup.get(item.get("candidate_id"), "")
+            )
+
             searchable_text = (
 
                 candidate_name
@@ -1049,6 +1144,15 @@ with right_col:
                 + str(
                     item.get(
                         "interviewer_name",
+                        ""
+                    )
+                )
+                + " "
+                + str(recruiter_name)
+                + " "
+                + str(
+                    item.get(
+                        "interview_round",
                         ""
                     )
                 )
@@ -1076,71 +1180,50 @@ with right_col:
     # --------------------------
 
     if interviews:
-
-        display_interviews, current_page, total_pages = render_pagination(interviews, page_size_default=25, key_prefix="interviews")
-
-        header = st.columns(
-            [3, 3, 2, 2, 2, 3, 1]
-        )
-
-        header[0].markdown(
-            "**Candidate**"
-        )
-
-        header[1].markdown(
-            "**Job**"
-        )
-
-        header[2].markdown(
-            "**Round**"
-        )
-
-        header[3].markdown(
-            "**Date**"
-        )
-
-        header[4].markdown(
-            "**Interviewer**"
-        )
-
-        header[5].markdown(
-            "**Status**"
-        )
-
-        header[6].markdown(
-            "**Edit**"
-        )
-
-        st.divider()
-
-        # Build a lookup of candidates who have an actual terminal interview round in the grid
         terminal_candidates = set(
             i["candidate_id"] for i in interviews if i["interview_status"] in ["Selected", "Rejected"]
         )
 
-        # Iterate over the sliced list instead of the full list
-        for item in display_interviews:
+        def render_interview_header():
+            if is_admin:
+                header = st.columns([3, 2.5, 1.5, 1.5, 2, 2, 2, 1])
+                header[0].markdown("**Candidate**")
+                header[1].markdown("**Job**")
+                header[2].markdown("**Round**")
+                header[3].markdown("**Date**")
+                header[4].markdown("**Interviewer**")
+                header[5].markdown("**Recruiter**")
+                header[6].markdown("**Status**")
+                header[7].markdown("**Edit**")
+            else:
+                header = st.columns([3, 3, 2, 2, 2, 3, 1])
+                header[0].markdown("**Candidate**")
+                header[1].markdown("**Job**")
+                header[2].markdown("**Round**")
+                header[3].markdown("**Date**")
+                header[4].markdown("**Interviewer**")
+                header[5].markdown("**Status**")
+                header[6].markdown("**Edit**")
+            st.divider()
 
-            cols = st.columns(
-                [3, 3, 2, 2, 2, 3, 1]
-            )
+        def render_interview_row(item):
+            if is_admin:
+                cols = st.columns([3, 2.5, 1.5, 1.5, 2, 2, 2, 1])
+            else:
+                cols = st.columns([3, 3, 2, 2, 2, 3, 1])
 
             cols[0].write(
-
                 candidate_lookup.get(
                     item["candidate_id"],
                     ""
                 )
-
             )
 
             cols[1].write(
-
                 job_display_lookup.get(
                     item["job_id"],
                     ""
                 )
-
             )
 
             cols[2].write(
@@ -1158,16 +1241,13 @@ with right_col:
             )
 
             status = item["interview_status"]
-
             status_colors = {
-
                 "Scheduled": "#2563EB",
                 "Completed": "#16A34A",
                 "Rescheduled": "#F59E0B",
                 "On Hold": "#EAB308",
                 "Selected": "#22C55E",
                 "Rejected": "#DC2626"
-
             }
 
             color = status_colors.get(
@@ -1175,8 +1255,7 @@ with right_col:
                 "#64748B"
             )
 
-            cols[5].markdown(
-                f"""
+            status_badge = f"""
                 <div style="
                 background:{color};
                 color:white;
@@ -1187,9 +1266,21 @@ with right_col:
                 ">
                 {status}
                 </div>
-                """,
-                unsafe_allow_html=True
-            )
+            """
+
+            if is_admin:
+                rec_display = (
+                    item.get("created_by_name")
+                    or user_name_lookup.get(item.get("created_by_user_id"))
+                    or candidate_creator_lookup.get(item.get("candidate_id"))
+                    or "-"
+                )
+                cols[5].write(rec_display)
+                cols[6].markdown(status_badge, unsafe_allow_html=True)
+                btn_col = cols[7]
+            else:
+                cols[5].markdown(status_badge, unsafe_allow_html=True)
+                btn_col = cols[6]
 
             # --- PREVIOUS ROUND & JOB CLOSURE LOCKING ENGINE ---
             c_stage = candidate_stage_lookup.get(item["candidate_id"])
@@ -1214,28 +1305,34 @@ with right_col:
 
             # SECURITY CHECK: Determine if the logged-in user has edit rights
             can_edit = False
-            if st.session_state.user_role in ["Admin", "Developer"]:
+            if is_admin:
                 can_edit = True
             elif item.get("created_by_user_id") == st.session_state.user_id:
                 can_edit = True
 
             if is_locked or not can_edit:
                 help_tip = lock_msg if is_locked else "Not authorized"
-                cols[6].markdown(f"<div title='{help_tip}' style='margin-top:2px; font-size:16px; cursor:help;'>🔒</div>", unsafe_allow_html=True)
+                btn_col.markdown(f"<div title='{help_tip}' style='margin-top:2px; font-size:16px; cursor:help;'>🔒</div>", unsafe_allow_html=True)
             else:
-                if cols[6].button(
+                if btn_col.button(
                     "✏️",
                     key=f"edit_{item['interview_id']}"
                 ):
-
                     st.session_state.edit_interview_id = (
                         item["interview_id"]
                     )
+                    st.rerun(scope="app")
 
-                    st.rerun()
+        render_paginated_section(
+            interviews,
+            render_interview_row,
+            page_size_default=25,
+            key_prefix="interviews",
+            render_header_fn=render_interview_header,
+            empty_message="No interviews found."
+        )
 
     else:
-
         st.info(
             "No interviews found."
         )

@@ -1,32 +1,11 @@
 import os
+import time
 import base64
 import streamlit as st
 import bcrypt
 from db import supabase
 from theme import apply_theme
-
-def render_logo(width=220, align="left"):
-    """
-    Renders the unified 1 Point Solution company logo with 100% alpha transparency.
-    """
-    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo.png")
-    if not os.path.exists(logo_path):
-        return
-        
-    try:
-        with open(logo_path, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode("utf-8")
-            
-        st.markdown(
-            f"""
-            <div class="ats-logo-wrapper" style="text-align: {align}; margin-bottom: 12px;">
-                <img src="data:image/png;base64,{b64}" style="width: {width}px; max-width: 100%; height: auto;" />
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-    except Exception:
-        pass
+from common import render_logo
 
 # ==========================
 # PAGE CONFIG
@@ -49,6 +28,10 @@ if "user_role" not in st.session_state:
     st.session_state.user_role = None
 if "password_reset_mode" not in st.session_state:
     st.session_state.password_reset_mode = False
+if "login_failed_attempts" not in st.session_state:
+    st.session_state.login_failed_attempts = 0
+if "login_lockout_until" not in st.session_state:
+    st.session_state.login_lockout_until = 0.0
 
 # ==========================
 # LOGIN & RESET VIEW FUNCTION
@@ -61,21 +44,24 @@ def login_view():
         st.markdown("# 🔑 Change Password")
         st.info("Enter your current password and choose a new password.")
         
-        with st.form("reset_form"):
-            email = st.text_input("Email")
-            current_password = st.text_input("Current Password", type="password")
-            new_password = st.text_input("New Password", type="password")
-            confirm_password = st.text_input("Confirm New Password", type="password")
+        def on_reset_enter():
+            st.session_state.reset_triggered = True
+
+        email = st.text_input("Email", key="reset_email")
+        current_password = st.text_input("Current Password", type="password", key="reset_curr_pwd")
+        new_password = st.text_input("New Password", type="password", key="reset_new_pwd")
+        confirm_password = st.text_input("Confirm New Password", type="password", key="reset_conf_pwd", on_change=on_reset_enter)
+
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            submit_change = st.button("🔑 Change Password", use_container_width=True, type="primary")
+        with col2:
+            if st.button("↩ Back to Login", use_container_width=True):
+                st.session_state.password_reset_mode = False
+                st.rerun()
             
-            col1, col2 = st.columns(2)
-            submit_change = col1.form_submit_button("🔑 Change Password", use_container_width=True)
-            back_btn = col2.form_submit_button("↩ Back to Login", use_container_width=True)
-            
-        if back_btn:
-            st.session_state.password_reset_mode = False
-            st.rerun()
-            
-        if submit_change:
+        do_change = submit_change or st.session_state.pop("reset_triggered", False)
+        if do_change:
             if not email.strip() or not current_password.strip() or not new_password.strip():
                 st.error("All fields are required.")
             elif new_password != confirm_password:
@@ -114,20 +100,37 @@ def login_view():
 
     st.markdown("# 🔐 Welcome to ATS Login")
     st.markdown("Please sign in to continue.")
+
+    # Check for active brute-force lockout
+    now = time.time()
+    if st.session_state.login_lockout_until > now:
+        remaining_sec = int(st.session_state.login_lockout_until - now)
+        st.error(f"🔒 Account temporarily locked due to 5 consecutive failed login attempts. Please wait {remaining_sec} seconds before trying again.")
+        st.stop()
     
-    with st.form("login_form"):
-        email = st.text_input("Email Address")
-        password = st.text_input("Password", type="password")
-        
-        col1, col2 = st.columns(2)
-        submit_login = col1.form_submit_button("🔑 Login", use_container_width=True)
-        forgot_password = col2.form_submit_button("🔄 Change Password", use_container_width=True)
+    def on_password_enter():
+        st.session_state.submit_triggered = True
 
-    if forgot_password:
-        st.session_state.password_reset_mode = True
-        st.rerun()
+    email = st.text_input("Email Address", key="login_email")
+    password = st.text_input("Password", type="password", key="login_password", on_change=on_password_enter)
 
-    if submit_login:
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        submit_login = st.button("🔑 Login", use_container_width=True, type="primary")
+    with col2:
+        if st.button("🔄 Change Password", use_container_width=True):
+            st.session_state.password_reset_mode = True
+            st.rerun()
+
+    do_submit = submit_login or st.session_state.pop("submit_triggered", False)
+
+    if do_submit:
+        now = time.time()
+        if st.session_state.login_lockout_until > now:
+            remaining_sec = int(st.session_state.login_lockout_until - now)
+            st.error(f"⏳ Please wait {remaining_sec} seconds before attempting to login again.")
+            st.stop()
+
         if not email.strip() or not password.strip():
             st.error("Please enter both email and password.")
         else:
@@ -142,11 +145,20 @@ def login_view():
                 )
 
                 if not response.data:
-                    st.error("Invalid email or account is inactive.")
+                    st.session_state.login_failed_attempts += 1
+                    if st.session_state.login_failed_attempts >= 5:
+                        st.session_state.login_lockout_until = time.time() + 180  # 3-minute lockout
+                        st.error("🚨 5 consecutive failed attempts. Login temporarily locked for 3 minutes.")
+                    else:
+                        remaining = 5 - st.session_state.login_failed_attempts
+                        st.error(f"Invalid email or account is inactive. ({remaining} attempts remaining)")
                 else:
                     user = response.data[0]
                     
                     if bcrypt.checkpw(password.encode(), user["password_hash"].encode()):
+                        # Reset failed attempt counter on success
+                        st.session_state.login_failed_attempts = 0
+                        st.session_state.login_lockout_until = 0.0
                         st.session_state.logged_in = True
                         st.session_state.user_id = user["user_id"]
                         st.session_state.user_name = user["full_name"]
@@ -154,7 +166,13 @@ def login_view():
                         st.success(f"Welcome back, {user['full_name']}!")
                         st.rerun()
                     else:
-                        st.error("Incorrect password.")
+                        st.session_state.login_failed_attempts += 1
+                        if st.session_state.login_failed_attempts >= 5:
+                            st.session_state.login_lockout_until = time.time() + 180  # 3-minute lockout
+                            st.error("🚨 5 consecutive failed attempts. Login temporarily locked for 3 minutes.")
+                        else:
+                            remaining = 5 - st.session_state.login_failed_attempts
+                            st.error(f"Incorrect password. ({remaining} attempts remaining)")
             except Exception as e:
                 st.error(f"Login error: {str(e)}")
 

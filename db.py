@@ -39,14 +39,19 @@ def get_secret(key: str, default: str = "") -> str:
 SUPABASE_URL = (
     get_secret("NEXT_PUBLIC_SUPABASE_URL")
     or get_secret("SUPABASE_URL")
-    or "https://ztxnpkzcftpgnkipvqrg.supabase.co"
 )
 SUPABASE_KEY = (
-    get_secret("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY")
+    get_secret("SUPABASE_SERVICE_ROLE_KEY")
+    or get_secret("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY")
     or get_secret("SUPABASE_KEY")
     or get_secret("NEXT_PUBLIC_SUPABASE_ANON_KEY")
-    or "sb_publishable_XzS4PpHaNykCvX_jON_UTQ_N7TtYzxR"
 )
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise RuntimeError(
+        "Supabase credentials not found! Please set SUPABASE_URL and SUPABASE_KEY "
+        "in your .env file or .streamlit/secrets.toml."
+    )
 
 _transport = SafeRetryTransport(
     max_retries=3,

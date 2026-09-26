@@ -156,24 +156,37 @@ def create_job_folder_structure(category_name: str, sub_category_name: str, job_
     }
 
 
-def _upload_to_onedrive_cloud(rel_path: str, file_bytes: bytes) -> bool:
-    """Uploads file content directly to Apps/ATS_Storage in Admin OneDrive via Microsoft Graph API."""
-    token = get_onedrive_access_token()
-    if not token:
-        return False
-    try:
-        import urllib.parse
-        clean_path = rel_path.replace("\\", "/").strip("/")
-        encoded_path = urllib.parse.quote(clean_path, safe="/")
-        url = f"https://graph.microsoft.com/v1.0/me/drive/root:/Apps/ATS_Storage/{encoded_path}:/content"
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": get_mime_type(clean_path)
-        }
-        res = requests.put(url, headers=headers, data=file_bytes, timeout=30)
-        return res.status_code in [200, 201]
-    except Exception:
-        return False
+def _upload_to_onedrive_cloud(rel_path: str, file_bytes: bytes, max_retries: int = 3) -> bool:
+    """Uploads file content directly to Apps/ATS_Storage in Admin OneDrive via Microsoft Graph API with exponential retry backoff."""
+    global _cached_msal_token, _cached_token_expiry
+    for attempt in range(max_retries):
+        token = get_onedrive_access_token()
+        if not token:
+            if attempt < max_retries - 1:
+                time.sleep(0.5 * (2 ** attempt))
+                continue
+            return False
+        try:
+            import urllib.parse
+            clean_path = rel_path.replace("\\", "/").strip("/")
+            encoded_path = urllib.parse.quote(clean_path, safe="/")
+            url = f"https://graph.microsoft.com/v1.0/me/drive/root:/Apps/ATS_Storage/{encoded_path}:/content"
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": get_mime_type(clean_path)
+            }
+            res = requests.put(url, headers=headers, data=file_bytes, timeout=30)
+            if res.status_code in [200, 201]:
+                return True
+            # If 401 Unauthorized, clear cached token to force re-acquisition
+            if res.status_code == 401:
+                _cached_msal_token = None
+                _cached_token_expiry = 0
+        except Exception:
+            pass
+        if attempt < max_retries - 1:
+            time.sleep(0.5 * (2 ** attempt))
+    return False
 
 
 def _download_from_onedrive_cloud(rel_path: str) -> bytes:
@@ -198,6 +211,7 @@ def _download_from_onedrive_cloud(rel_path: str) -> bytes:
 def save_job_document(uploaded_file, category_name: str, sub_category_name: str, job_ref: str, custom_name: str = None) -> str:
     """
     Saves a Job Document directly to Admin OneDrive Cloud (Apps/ATS_Storage) and local storage.
+    Enforces OneDrive-only storage (no secondary vendor upload).
     Returns the relative path for database storage.
     """
     if uploaded_file is None:
@@ -217,16 +231,11 @@ def save_job_document(uploaded_file, category_name: str, sub_category_name: str,
         jr = sanitize_folder_name(job_ref)
         rel_path = f"{cat}/{sub}/{jr}/Job_Documents/{safe_name}"
 
-        # 1. Upload to Admin OneDrive Cloud at Apps/ATS_Storage (1 TB Storage)
-        _upload_to_onedrive_cloud(rel_path, file_bytes)
+        # 1. Upload to Admin OneDrive Cloud at Apps/ATS_Storage (1 TB Storage) with retry
+        onedrive_ok = _upload_to_onedrive_cloud(rel_path, file_bytes)
 
-        # 2. Upload to Supabase Storage Backup
-        try:
-            supabase.storage.from_("job_documents").upload(safe_name, file_bytes, {"upsert": "true"})
-        except Exception:
-            pass
-
-        # 3. Save to Local Disk if writable
+        # 2. Save to Local Disk if writable
+        local_saved = False
         try:
             abs_path = os.path.join(dirs["job_documents_dir"], safe_name)
             with open(abs_path, "wb") as f:
@@ -234,8 +243,16 @@ def save_job_document(uploaded_file, category_name: str, sub_category_name: str,
             flat_path = os.path.join(JOB_DOCS_DIR, safe_name)
             with open(flat_path, "wb") as f:
                 f.write(file_bytes)
+            local_saved = True
         except Exception:
             pass
+
+        # 3. Verify upload success — never fail silently
+        if not onedrive_ok and not local_saved:
+            st.error(f"❌ Failed to save Job Document '{safe_name}' to OneDrive cloud. Please check OneDrive connectivity.")
+            return None
+        elif not onedrive_ok:
+            st.warning(f"⚠️ Job Document '{safe_name}' saved locally, but OneDrive cloud sync failed.")
 
         return rel_path
 
@@ -247,6 +264,7 @@ def save_job_document(uploaded_file, category_name: str, sub_category_name: str,
 def save_candidate_resume(uploaded_file, category_name: str, sub_category_name: str, job_ref: str, custom_name: str = None) -> str:
     """
     Saves a Candidate Resume directly to Admin OneDrive Cloud (Apps/ATS_Storage) and local storage.
+    Enforces OneDrive-only storage (no secondary vendor upload).
     Returns the relative path for database storage.
     """
     if uploaded_file is None:
@@ -266,16 +284,11 @@ def save_candidate_resume(uploaded_file, category_name: str, sub_category_name: 
         jr = sanitize_folder_name(job_ref)
         rel_path = f"{cat}/{sub}/{jr}/Resumes/{safe_name}"
 
-        # 1. Upload to Admin OneDrive Cloud at Apps/ATS_Storage (1 TB Storage)
-        _upload_to_onedrive_cloud(rel_path, file_bytes)
+        # 1. Upload to Admin OneDrive Cloud at Apps/ATS_Storage (1 TB Storage) with retry
+        onedrive_ok = _upload_to_onedrive_cloud(rel_path, file_bytes)
 
-        # 2. Upload to Supabase Storage Backup
-        try:
-            supabase.storage.from_("Resume").upload(safe_name, file_bytes, {"upsert": "true"})
-        except Exception:
-            pass
-
-        # 3. Save to Local Disk if writable
+        # 2. Save to Local Disk if writable
+        local_saved = False
         try:
             abs_path = os.path.join(dirs["resumes_dir"], safe_name)
             with open(abs_path, "wb") as f:
@@ -283,8 +296,16 @@ def save_candidate_resume(uploaded_file, category_name: str, sub_category_name: 
             flat_path = os.path.join(RESUMES_DIR, safe_name)
             with open(flat_path, "wb") as f:
                 f.write(file_bytes)
+            local_saved = True
         except Exception:
             pass
+
+        # 3. Verify upload success — never fail silently
+        if not onedrive_ok and not local_saved:
+            st.error(f"❌ Failed to save Resume '{safe_name}' to OneDrive cloud. Please check OneDrive connectivity.")
+            return None
+        elif not onedrive_ok:
+            st.warning(f"⚠️ Resume '{safe_name}' saved locally, but OneDrive cloud sync failed.")
 
         return rel_path
 

@@ -3,6 +3,7 @@ import re
 import io
 import json
 import base64
+import time
 from datetime import datetime, date
 import requests
 from dotenv import load_dotenv
@@ -264,12 +265,12 @@ def sanitize_parsed_output(parsed: dict) -> dict:
     }
 
 
-def _call_gemini_api(api_key: str, model: str, payload: dict) -> tuple[bool, dict, str]:
-    """Makes a single call to the Google Gemini generateContent API."""
+def _call_gemini_api(api_key: str, model: str, payload: dict, timeout: int = 15) -> tuple[bool, dict, str]:
+    """Makes a single call to the Google Gemini generateContent API with tight timeout."""
     endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
     headers = {"Content-Type": "application/json"}
     try:
-        response = requests.post(endpoint, headers=headers, json=payload, timeout=40)
+        response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
         if response.status_code == 429:
             return False, {}, "RATE_LIMIT_429"
         if response.status_code != 200:
@@ -296,8 +297,8 @@ def _call_gemini_api(api_key: str, model: str, payload: dict) -> tuple[bool, dic
         return False, {}, str(e)
 
 
-def _call_groq_api(api_key: str, model: str, system_prompt: str, resume_text: str) -> tuple[bool, dict, str]:
-    """Makes a call to Groq Cloud OpenAI-compatible chat API."""
+def _call_groq_api(api_key: str, model: str, system_prompt: str, resume_text: str, timeout: int = 15) -> tuple[bool, dict, str]:
+    """Makes a call to Groq Cloud OpenAI-compatible chat API with tight timeout."""
     endpoint = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -313,7 +314,7 @@ def _call_groq_api(api_key: str, model: str, system_prompt: str, resume_text: st
         "temperature": 0.1
     }
     try:
-        response = requests.post(endpoint, headers=headers, json=payload, timeout=30)
+        response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
         if response.status_code == 429:
             return False, {}, "RATE_LIMIT_429"
         if response.status_code != 200:
@@ -329,8 +330,8 @@ def _call_groq_api(api_key: str, model: str, system_prompt: str, resume_text: st
         return False, {}, str(e)
 
 
-def _call_openrouter_api(api_key: str, model: str, system_prompt: str, resume_text: str) -> tuple[bool, dict, str]:
-    """Makes a call to OpenRouter OpenAI-compatible chat API."""
+def _call_openrouter_api(api_key: str, model: str, system_prompt: str, resume_text: str, timeout: int = 15) -> tuple[bool, dict, str]:
+    """Makes a call to OpenRouter OpenAI-compatible chat API with tight timeout."""
     endpoint = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -348,7 +349,7 @@ def _call_openrouter_api(api_key: str, model: str, system_prompt: str, resume_te
         "temperature": 0.1
     }
     try:
-        response = requests.post(endpoint, headers=headers, json=payload, timeout=35)
+        response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
         if response.status_code == 429:
             return False, {}, "RATE_LIMIT_429"
         if response.status_code != 200:
@@ -460,68 +461,89 @@ Important Rules:
     }
 
     errors = []
+    start_time = time.time()
+    MAX_OVERALL_BUDGET = 25.0  # Max total seconds before bailing out to keep UI snappy
+    MAX_TOTAL_ATTEMPTS = 4     # Guaranteed budget: max 2 for Gemini, 1 for Groq, 1 for OpenRouter
+    total_attempts = 0
+
+    def time_left():
+        return max(1.0, MAX_OVERALL_BUDGET - (time.time() - start_time))
 
     # -------------------------------------------------------------
-    # 1. Try Gemini Key Pool & Models
+    # 1. Try Gemini Key Pool & Models (Capped at 2 keys, 1 top model per key)
     # -------------------------------------------------------------
     env_gemini_model = os.getenv("GEMINI_MODEL", "").strip()
-    gemini_models = ["gemini-flash-lite-latest", "gemini-flash-latest", "gemini-1.5-flash", "gemini-2.0-flash-lite"]
+    gemini_models = ["gemini-flash-latest", "gemini-1.5-flash", "gemini-flash-lite-latest"]
     if env_gemini_model and env_gemini_model not in gemini_models:
         gemini_models.insert(0, env_gemini_model)
 
-    for idx, key in enumerate(gemini_keys, 1):
-        for model in gemini_models:
-            success, data, msg = _call_gemini_api(key, model, gemini_payload)
+    for idx, key in enumerate(gemini_keys[:2], 1):
+        if time_left() <= 2.0 or total_attempts >= MAX_TOTAL_ATTEMPTS:
+            break
+        for model in gemini_models[:1]:
+            rem_timeout = min(12, int(time_left()))
+            if rem_timeout < 2 or total_attempts >= MAX_TOTAL_ATTEMPTS:
+                break
+            total_attempts += 1
+            success, data, msg = _call_gemini_api(key, model, gemini_payload, timeout=rem_timeout)
             if success:
                 return True, data, "Resume parsed successfully via Gemini AI!"
             if msg == "RATE_LIMIT_429":
-                errors.append(f"Gemini Key #{idx} rate-limited (429).")
+                errors.append(f"Gemini Key #{idx} rate-limited.")
                 break # Switch to next key in pool immediately
             else:
                 errors.append(f"Gemini ({model}): {msg}")
 
     # -------------------------------------------------------------
-    # 2. Try Groq Key Pool (if Gemini keys exhausted or failed)
+    # 2. Try Groq Key Pool (if Gemini failed, within budget & attempt cap)
     # -------------------------------------------------------------
-    if groq_keys and extracted_text:
+    if groq_keys and extracted_text and time_left() > 2.0 and total_attempts < MAX_TOTAL_ATTEMPTS:
         env_groq_model = os.getenv("GROQ_MODEL", "").strip()
-        groq_models = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.6-27b", "groq/compound-mini", "groq/compound"]
+        groq_models = ["openai/gpt-oss-20b", "groq/compound-mini"]
         if env_groq_model and env_groq_model not in groq_models:
             groq_models.insert(0, env_groq_model)
 
-        for idx, key in enumerate(groq_keys, 1):
-            for model in groq_models:
-                success, data, msg = _call_groq_api(key, model, system_prompt, extracted_text)
+        for idx, key in enumerate(groq_keys[:2], 1):
+            if time_left() <= 2.0 or total_attempts >= MAX_TOTAL_ATTEMPTS:
+                break
+            for model in groq_models[:1]:
+                rem_timeout = min(12, int(time_left()))
+                if rem_timeout < 2 or total_attempts >= MAX_TOTAL_ATTEMPTS:
+                    break
+                total_attempts += 1
+                success, data, msg = _call_groq_api(key, model, system_prompt, extracted_text, timeout=rem_timeout)
                 if success:
                     return True, data, "Resume parsed successfully via Groq AI!"
                 if msg == "RATE_LIMIT_429":
-                    errors.append(f"Groq Key #{idx} rate-limited (429).")
+                    errors.append(f"Groq Key #{idx} rate-limited.")
                     break # Switch to next Groq key
                 else:
                     errors.append(f"Groq ({model}): {msg}")
 
     # -------------------------------------------------------------
-    # 3. Try OpenRouter Key Pool (if Gemini & Groq exhausted or failed)
+    # 3. Try OpenRouter Key Pool (if Gemini & Groq failed, within budget)
     # -------------------------------------------------------------
-    if openrouter_keys and extracted_text:
+    if openrouter_keys and extracted_text and time_left() > 2.0 and total_attempts < MAX_TOTAL_ATTEMPTS:
         openrouter_models = [
-            "google/gemma-4-26b-a4b-it:free",
-            "google/gemma-4-31b-it:free",
-            "nvidia/nemotron-3.5-lightning:free",
-            "dots-studio/dots-3-note-preview:free",
             "liquid/lfm-2.5-2.6b:free",
-            "z-ai/glm-5.2:free"
+            "google/gemma-4-26b-a4b-it:free"
         ]
-        for idx, key in enumerate(openrouter_keys, 1):
-            for model in openrouter_models:
-                success, data, msg = _call_openrouter_api(key, model, system_prompt, extracted_text)
+        for idx, key in enumerate(openrouter_keys[:1], 1):
+            if time_left() <= 2.0 or total_attempts >= MAX_TOTAL_ATTEMPTS:
+                break
+            for model in openrouter_models[:1]:
+                rem_timeout = min(12, int(time_left()))
+                if rem_timeout < 2 or total_attempts >= MAX_TOTAL_ATTEMPTS:
+                    break
+                total_attempts += 1
+                success, data, msg = _call_openrouter_api(key, model, system_prompt, extracted_text, timeout=rem_timeout)
                 if success:
                     return True, data, "Resume parsed successfully via OpenRouter AI!"
                 if msg == "RATE_LIMIT_429":
-                    errors.append(f"OpenRouter Key #{idx} rate-limited (429).")
+                    errors.append(f"OpenRouter Key #{idx} rate-limited.")
                     break
                 else:
                     errors.append(f"OpenRouter ({model}): {msg}")
 
-    err_summary = " | ".join(errors[-3:]) if errors else "All AI providers failed."
+    err_summary = " | ".join(errors[-2:]) if errors else "AI parse timeout or provider unavailable."
     return False, {}, err_summary

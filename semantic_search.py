@@ -5,59 +5,14 @@ from db import supabase
 from datetime import datetime, date
 from matcher import extract_skill_tokens, normalize_text, calculate_experience_match, calculate_budget_match, parse_date_safely
 from geo_distance import calculate_geo_proximity
-from common import fetch_all_legacy_candidates, fetch_all_live_candidates
+from common import get_unified_candidate_pool
 
-@st.cache_data(ttl=30)
 def get_all_candidates_pool():
     """
-    Fetches unified pool of active candidates and legacy archive candidates.
-    Filters out deactivated, retired, deceased, or blacklisted profiles.
-    Uses paginated fetching to load 100% of candidates (5,000+).
+    Delegates to the unified, shared candidate pool in common.py.
+    Eliminates duplicated in-memory fetches and synchronizes cache.
     """
-    inactive_statuses = {"retired", "deceased", "blacklisted", "inactive", "inactive / left market"}
-    all_pool = []
-    try:
-        fields_live = "candidate_id, candidate_reference_no, first_name, last_name, email, mobile_no, alternate_mobile, current_company, current_designation, skills, experience_years, experience_months, current_ctc, expected_ctc, current_location, candidate_status, current_stage, resume_path, job_id, created_by_name, created_by_user_id, created_on, qualification, remarks"
-        live_data = fetch_all_live_candidates(fields_live)
-        live_candidate_ids = set()
-        for c in live_data:
-            live_candidate_ids.add(c["candidate_id"])
-            c_status = (c.get("candidate_status") or "").strip().lower()
-            c_stage = (c.get("current_stage") or "").strip().lower()
-            if c_status in inactive_statuses or c_stage in inactive_statuses:
-                continue
-            c["source_pool"] = "Live Pool"
-            c["is_legacy"] = False
-            all_pool.append(c)
-    except Exception:
-        pass
-
-    try:
-        fields_legacy = "legacy_candidate_id, candidate_reference_no, first_name, last_name, email, mobile_no, current_company, current_designation, skills, experience_years, experience_months, current_ctc, expected_ctc, current_location, notice_period, notice_negotiable, qualification, education_details, resume_name, resume_path, is_migrated_to_active, migrated_candidate_id"
-        legacy_data = fetch_all_legacy_candidates(fields_legacy)
-        for c in legacy_data:
-            if c.get("is_migrated_to_active") and c.get("migrated_candidate_id") in live_candidate_ids:
-                continue
-            c["candidate_id"] = f"LEG_{c['legacy_candidate_id']}"
-            c["source_pool"] = "Legacy Pool"
-            c["is_legacy"] = True
-            
-            # Check if candidate has been deactivated in the legacy pool
-            nn = str(c.get("notice_negotiable") or "").strip()
-            if nn.startswith("Deactivated:"):
-                deact_status = nn.replace("Deactivated:", "").strip()
-                c["candidate_status"] = deact_status
-                c["current_stage"] = deact_status
-            else:
-                c["candidate_status"] = "Archived"
-                c["current_stage"] = "Legacy Archive"
-                
-            c["job_id"] = None
-            all_pool.append(c)
-    except Exception:
-        pass
-
-    return all_pool
+    return get_unified_candidate_pool()
 
 # Common Indian cities & states for location detection in queries
 LOCATIONS_LOOKUP = [
@@ -187,7 +142,21 @@ def search_candidates_semantic(query_text, candidate_pool, min_score=30, limit=5
 
     results = []
 
-    for c in candidate_pool:
+    # Pre-filtering optimization: skip profiles grossly out of range before heavy text/geo calculations
+    filtered_pool = candidate_pool
+    if exp_min is not None and exp_min > 2.0:
+        filtered_pool = [
+            c for c in filtered_pool
+            if (float(c.get("experience_years", 0) or 0) + 2.5) >= exp_min
+        ]
+    if budget_max is not None and budget_max > 0:
+        max_ctc_cap = budget_max * 100000 * 2.5 if budget_max < 100 else budget_max * 2.5
+        filtered_pool = [
+            c for c in filtered_pool
+            if float(c.get("expected_ctc", 0) or 0) <= max_ctc_cap
+        ]
+
+    for c in filtered_pool:
         reasons = []
         score = 0.0
 

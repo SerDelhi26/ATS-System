@@ -341,13 +341,10 @@ def parse_and_diff_excel(file_bytes, filename, existing_mappings):
             db_by_comp_cand[(comp_key, cand_key)] = m
 
     diff_list = []
-    actions_to_execute = []
-    
-    for idx, row in df_clean.iterrows():
+    records = df_clean.to_dict(orient="records")
+    for idx, row in enumerate(records):
         def get_row_val(field):
-            v = row.get(field)
-            if isinstance(v, pd.Series):
-                v = v.iloc[0] if not v.empty else ""
+            v = row.get(field, "")
             return clean_str_val(v)
 
         comp_name = get_row_val("company_name")

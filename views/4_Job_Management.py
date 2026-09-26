@@ -5,7 +5,7 @@ from datetime import datetime
 import os
 import re
 import textwrap
-from common import show_logout, show_job_notifications, show_user_profile, render_pagination, fetch_all_legacy_candidates, fetch_all_live_candidates, fetch_all_from_table, clear_data_cache
+from common import show_logout, show_job_notifications, show_user_profile, render_pagination, render_paginated_section, fetch_all_legacy_candidates, fetch_all_live_candidates, fetch_all_from_table, clear_data_cache, get_master_lookups, get_unified_candidate_pool
 from theme import apply_theme
 import storage
 from matcher import calculate_candidate_match, get_top_matched_candidates
@@ -57,80 +57,31 @@ if st.session_state.get("success_message"):
 # FUNCTIONS
 # ==========================
 
-@st.cache_data(ttl=300)
 def get_job_titles():
-    return supabase.table("job_title_master").select("*").execute().data
+    return get_master_lookups().get("job_titles", [])
 
-@st.cache_data(ttl=300)
 def get_companies():
-    return supabase.table("company_master").select("*").execute().data
+    return get_master_lookups().get("companies", [])
 
-@st.cache_data(ttl=300)
 def get_categories():
-    return supabase.table("category_master").select("*").execute().data
+    return get_master_lookups().get("categories", [])
 
-@st.cache_data(ttl=300)
-def get_sub_categories(category_id):
-    return supabase.table("sub_category_master").select("*").eq("category_id", category_id).execute().data
+def get_sub_categories(category_id=None):
+    all_sub = get_master_lookups().get("sub_categories", [])
+    if category_id:
+        return [s for s in all_sub if s.get("category_id") == category_id]
+    return all_sub
 
-# NEW: Fetch all subcategories for the global filter lookup
-@st.cache_data(ttl=300)
 def get_all_sub_categories():
-    return supabase.table("sub_category_master").select("*").execute().data
+    return get_master_lookups().get("sub_categories", [])
 
-@st.cache_data(ttl=300)
 def get_recruiters():
-    return supabase.table("users").select("*").eq("role", "Recruiter").eq("status", "Active").execute().data
+    all_users = get_master_lookups().get("users", [])
+    return [u for u in all_users if u.get("role") == "Recruiter" and u.get("status", "Active") == "Active"]
 
-@st.cache_data(ttl=300)
 def get_all_candidates_for_matching():
-    """
-    Fetches both Live active candidates from candidate_management 
-    and Historical candidates from legacy_candidates for unified matching.
-    Uses paginated fetching to load 100% of candidates (5,000+).
-    """
-    all_pool = []
-    
-    # 1. Fetch live candidates
-    live_candidate_ids = set()
-    try:
-        fields_live = "candidate_id, candidate_reference_no, first_name, last_name, gender, approx_dob, email, mobile_no, current_company, current_designation, skills, experience_years, experience_months, current_ctc, expected_ctc, current_location, candidate_status, current_stage, resume_path, job_id, created_by_name, created_by_user_id, created_on, remarks"
-        live_data = fetch_all_live_candidates(fields_live)
-        for c in live_data:
-            c["source_pool"] = "Live Pool"
-            c["is_legacy"] = False
-            live_candidate_ids.add(c["candidate_id"])
-            all_pool.append(c)
-    except Exception:
-        pass
-
-    # 2. Fetch all legacy candidates via pagination
-    try:
-        fields_legacy = "legacy_candidate_id, candidate_reference_no, first_name, last_name, gender, approx_dob, email, mobile_no, current_company, current_designation, skills, experience_years, experience_months, current_ctc, expected_ctc, current_location, notice_period, notice_negotiable, qualification, education_details, resume_name, resume_path, is_migrated_to_active, migrated_candidate_id"
-        legacy_data = fetch_all_legacy_candidates(fields_legacy)
-        for c in legacy_data:
-            if c.get("is_migrated_to_active") and c.get("migrated_candidate_id") in live_candidate_ids:
-                continue
-            c["candidate_id"] = f"LEG_{c['legacy_candidate_id']}"
-            c["source_pool"] = "Legacy Pool"
-            c["is_legacy"] = True
-            
-            # Check if candidate has been deactivated in the legacy pool
-            nn = str(c.get("notice_negotiable") or "").strip()
-            if nn.startswith("Deactivated:"):
-                deact_status = nn.replace("Deactivated:", "").strip()
-                c["candidate_status"] = deact_status
-                c["current_stage"] = deact_status
-            else:
-                c["candidate_status"] = "Archived"
-                c["current_stage"] = "Legacy Archive"
-                
-            c["job_id"] = None
-            all_pool.append(c)
-    except Exception:
-        pass
-
-    return all_pool
+    """Delegates to the centralized, memory-cached unified candidate pool."""
+    return get_unified_candidate_pool()
 
 @st.cache_data(ttl=60)
 def get_cached_job_assignments():
@@ -159,7 +110,7 @@ def get_cached_jobs_data(is_admin, user_id):
             return res.data or []
         return []
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner="🔍 Finding top candidate matches...")
 def get_inline_top_matches_cached(job_dict, pool_type, limit=10, min_score=35, exp_leeway=1, budget_stretch=15):
     all_cands = get_all_candidates_for_matching()
     if pool_type == "Live Only":
@@ -187,7 +138,7 @@ def get_cached_open_jobs(is_admin, user_id):
         open_jobs = [j for j in open_jobs if j["job_id"] in my_job_ids]
     return open_jobs
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner="🔍 Calculating ranked candidate matches...")
 def get_global_ranked_matches_cached(
     selected_job_id,
     selected_job_dict,
@@ -553,7 +504,7 @@ if is_admin:
                             st.warning("Already exists")
                         else:
                             supabase.table("job_title_master").insert({"job_title_name": new_jt_name.strip()}).execute()
-                            st.cache_data.clear()
+                            clear_data_cache("lookups")
                             st.session_state["pending_job_title"] = new_jt_name.strip()
                             st.session_state.pop_reset_ver += 1
                             st.toast(f"Job Title '{new_jt_name.strip()}' added & selected!", icon="✅")
@@ -582,7 +533,7 @@ if is_admin:
                                     "job_title_name": clean_jt,
                                     "modified_date": datetime.now().isoformat()
                                 }).eq("job_title_id", sel_jt_rec["job_title_id"]).execute()
-                                st.cache_data.clear()
+                                clear_data_cache("lookups")
                                 st.session_state["pending_job_title"] = clean_jt
                                 st.session_state.pop_reset_ver += 1
                                 st.toast(f"Job Title corrected to '{clean_jt}'!", icon="✅")
@@ -619,7 +570,7 @@ if is_admin:
                             st.warning("Already exists")
                         else:
                             supabase.table("company_master").insert({"company_name": new_co_name.strip()}).execute()
-                            st.cache_data.clear()
+                            clear_data_cache("lookups")
                             st.session_state["pending_company"] = new_co_name.strip()
                             st.session_state.pop_reset_ver += 1
                             st.toast(f"Company '{new_co_name.strip()}' added & selected!", icon="✅")
@@ -647,7 +598,7 @@ if is_admin:
                                 supabase.table("company_master").update({
                                     "company_name": clean_co
                                 }).eq("company_id", sel_co_rec["company_id"]).execute()
-                                st.cache_data.clear()
+                                clear_data_cache("lookups")
                                 st.session_state["pending_company"] = clean_co
                                 st.session_state.pop_reset_ver += 1
                                 st.toast(f"Company corrected to '{clean_co}'!", icon="✅")
@@ -684,7 +635,7 @@ if is_admin:
                             st.warning("Already exists")
                         else:
                             supabase.table("category_master").insert({"category_name": new_cat_name.strip()}).execute()
-                            st.cache_data.clear()
+                            clear_data_cache("lookups")
                             st.session_state["pending_category"] = new_cat_name.strip()
                             st.session_state.pop_reset_ver += 1
                             st.toast(f"Category '{new_cat_name.strip()}' added & selected!", icon="✅")
@@ -724,7 +675,7 @@ if is_admin:
                         st.error("Select Category first")
                     else:
                         supabase.table("sub_category_master").insert({"category_id": category_record["category_id"], "sub_category_name": new_sc_name.strip()}).execute()
-                        st.cache_data.clear()
+                        clear_data_cache("lookups")
                         st.session_state["pending_sub_category"] = new_sc_name.strip()
                         st.session_state.pop_reset_ver += 1
                         st.toast(f"Sub Category '{new_sc_name.strip()}' added & selected!", icon="✅")
@@ -844,10 +795,20 @@ if is_admin:
                     supabase.table("job_management").update(job_data).eq("job_id", editing_job["job_id"]).execute()
                     supabase.table("job_assignment").delete().eq("job_id", editing_job["job_id"]).execute()
                     
-                    for recruiter_name in selected_recruiters:
-                        recruiter = next(r for r in recruiters if r["full_name"] == recruiter_name)
-                        supabase.table("job_assignment").insert({"job_id": editing_job["job_id"], "user_id": recruiter["user_id"]}).execute()
+                    if selected_recruiters:
+                        recruiter_map = {r["full_name"]: r["user_id"] for r in recruiters}
+                        assignments = [
+                            {"job_id": editing_job["job_id"], "user_id": recruiter_map[name]}
+                            for name in selected_recruiters
+                            if name in recruiter_map
+                        ]
+                        if assignments:
+                            supabase.table("job_assignment").insert(assignments).execute()
 
+                    get_cached_jobs_data.clear()
+                    get_cached_open_jobs.clear()
+                    get_cached_job_assignments.clear()
+                    clear_data_cache("jobs")
                     st.session_state.success_message = "Job Updated Successfully"
                     st.session_state.edit_job_id = None
                     st.rerun()
@@ -879,10 +840,20 @@ if is_admin:
 
                     supabase.table("job_management").update({"job_reference_no": job_ref, "job_document_name": job_document.name if job_document else None, "job_document_path": job_document_path}).eq("job_id", job["job_id"]).execute()
 
-                    for recruiter_name in selected_recruiters:
-                        recruiter = next(r for r in recruiters if r["full_name"] == recruiter_name)
-                        supabase.table("job_assignment").insert({"job_id": job["job_id"], "user_id": recruiter["user_id"]}).execute()
+                    if selected_recruiters:
+                        recruiter_map = {r["full_name"]: r["user_id"] for r in recruiters}
+                        assignments = [
+                            {"job_id": job["job_id"], "user_id": recruiter_map[name]}
+                            for name in selected_recruiters
+                            if name in recruiter_map
+                        ]
+                        if assignments:
+                            supabase.table("job_assignment").insert(assignments).execute()
 
+                    get_cached_jobs_data.clear()
+                    get_cached_open_jobs.clear()
+                    get_cached_job_assignments.clear()
+                    clear_data_cache("jobs")
                     st.session_state.success_message = f"Job Created : {job_ref}"
                     st.session_state.form_reset_job += 1
                     st.rerun()
@@ -1017,28 +988,27 @@ with right_col:
 
         # Draw Grid
         if not jobs_df.empty:
-            display_jobs_df, current_page, total_pages = render_pagination(jobs_df.fillna(""), page_size_default=25, key_prefix="jobs")
-
             if is_admin:
                 col_widths = [2, 3, 3, 3, 2, 2, 2, 2.5, 1.5, 1.5]
             else:
                 col_widths = [2, 3, 3, 3, 2, 2, 2, 2.5]
 
-            header = st.columns(col_widths)
-            header[0].markdown("**JR Number**")
-            header[1].markdown("**Job Title**")
-            header[2].markdown("**Company**")
-            header[3].markdown("**Recruiters**")
-            header[4].markdown("**Location**")
-            header[5].markdown("**Openings**")
-            header[6].markdown("**Status**")
-            header[7].markdown("**Doc**")
-            if is_admin:
-                header[8].markdown("**Edit**")
-                header[9].markdown("**Status**")
-            st.divider()
+            def render_job_header():
+                header = st.columns(col_widths)
+                header[0].markdown("**JR Number**")
+                header[1].markdown("**Job Title**")
+                header[2].markdown("**Company**")
+                header[3].markdown("**Recruiters**")
+                header[4].markdown("**Location**")
+                header[5].markdown("**Openings**")
+                header[6].markdown("**Status**")
+                header[7].markdown("**Doc**")
+                if is_admin:
+                    header[8].markdown("**Edit**")
+                    header[9].markdown("**Status**")
+                st.divider()
 
-            for _, row in display_jobs_df.iterrows():
+            def render_job_row(row):
                 with st.container():
                     cols = st.columns(col_widths)
                     cols[0].write(row["job_reference_no"])
@@ -1058,24 +1028,30 @@ with right_col:
                     if row["job_document_path"]:
                         if cols[7].button("📄 View", key=f"doc_{row['job_id']}"):
                             st.session_state.selected_job_doc = row["job_document_path"]
-                            st.rerun()
+                            st.rerun(scope="app")
                     else:
                         cols[7].write("-")
 
                     if is_admin:
                         if cols[8].button("✏️", key=f"edit_{row['job_id']}"):
                             st.session_state.edit_job_id = row["job_id"]
-                            st.rerun()
+                            st.rerun(scope="app")
                         if row["job_status"] == "Open":
                             if cols[9].button("🔒", key=f"close_{row['job_id']}"):
                                 supabase.table("job_management").update({"job_status": "Closed"}).eq("job_id", row["job_id"]).execute()
+                                get_cached_jobs_data.clear()
+                                get_cached_open_jobs.clear()
+                                clear_data_cache("jobs")
                                 st.success("Job Closed Successfully")
-                                st.rerun()
+                                st.rerun(scope="app")
                         else:
                             if cols[9].button("🔓", key=f"reopen_{row['job_id']}"):
                                 supabase.table("job_management").update({"job_status": "Open"}).eq("job_id", row["job_id"]).execute()
+                                get_cached_jobs_data.clear()
+                                get_cached_open_jobs.clear()
+                                clear_data_cache("jobs")
                                 st.success("Job Reopened Successfully")
-                                st.rerun()
+                                st.rerun(scope="app")
 
                     # Expander 1: Job Description
                     with st.expander("👁️ View Job Requirements & Description"):
@@ -1154,12 +1130,12 @@ with right_col:
                                         if m_col1.button(map_btn_label, key=f"map_{row['job_id']}_{cand['candidate_id']}", use_container_width=True):
                                             if map_candidate_to_job(cand, row["job_id"]):
                                                 st.success(f"Candidate {c_fullname} mapped to {row['job_reference_no']}!")
-                                                st.rerun()
+                                                st.rerun(scope="app")
                                                 
                                     if cand.get("resume_path"):
                                         if m_col2.button(f"📄 View CV", key=f"cv_{row['job_id']}_{cand['candidate_id']}", use_container_width=True):
                                             st.session_state.selected_job_doc = cand["resume_path"]
-                                            st.rerun()
+                                            st.rerun(scope="app")
                                     else:
                                         m_col2.caption("No CV uploaded")
                                         
@@ -1168,6 +1144,15 @@ with right_col:
                             st.info("No candidates in the database currently match this job's criteria. Try adjusting the Leeway or Budget Stretch options above.")
                     
                     st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
+
+            render_paginated_section(
+                jobs_df.fillna(""),
+                render_job_row,
+                page_size_default=25,
+                key_prefix="jobs",
+                render_header_fn=render_job_header,
+                empty_message="No jobs found."
+            )
         else:
             st.info("No jobs found.")
 
@@ -1306,14 +1291,7 @@ with right_col:
             if ranked_matches:
                 st.markdown(f"#### 🏆 Top Matched Candidate(s) ({len(ranked_matches)} matches found)")
                 
-                # Pagination over smart matches
-                display_ranked_matches, m_curr_page, m_total_pages = render_pagination(
-                    ranked_matches,
-                    page_size_default=25,
-                    key_prefix=f"smart_match_{selected_match_job['job_id']}"
-                )
-                
-                for idx, match_item in enumerate(display_ranked_matches, (m_curr_page - 1) * 25 + 1):
+                def render_smart_match_row(match_item, idx):
                     c = match_item["candidate"]
                     m = match_item["match"]
                     
@@ -1391,12 +1369,12 @@ with right_col:
                             if btn_col1.button(map_label, key=f"global_map_{c['candidate_id']}", use_container_width=True):
                                 if map_candidate_to_job(c, selected_match_job["job_id"]):
                                     st.success(f"Candidate {full_name} successfully mapped to {selected_match_job['job_reference_no']}!")
-                                    st.rerun()
+                                    st.rerun(scope="app")
                                     
                         if c.get("resume_path"):
                             if btn_col2.button(f"📄 Download CV ({full_name})", key=f"global_cv_{c['candidate_id']}", use_container_width=True):
                                 st.session_state.selected_job_doc = c["resume_path"]
-                                st.rerun()
+                                st.rerun(scope="app")
                         else:
                             btn_col2.caption("No CV on file")
 
@@ -1413,5 +1391,12 @@ with right_col:
                             
                         btn_col4.markdown(f"<div style='font-size:12px; opacity:0.85; padding-top:6px;'>📞 <b>{c.get('mobile_no', '-')}</b><br/>✉️ {c.get('email', '-')}</div>", unsafe_allow_html=True)
                         st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+
+                render_paginated_section(
+                    ranked_matches,
+                    render_smart_match_row,
+                    page_size_default=25,
+                    key_prefix=f"smart_match_{selected_match_job['job_id']}"
+                )
             else:
                 st.info(f"No candidates found matching with >= {min_threshold}% threshold. Try extending the Experience range or Budget stretch in the controls above.")

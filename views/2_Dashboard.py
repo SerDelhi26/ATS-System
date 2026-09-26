@@ -85,21 +85,52 @@ if st.session_state.get("user_role") not in ["Admin", "Developer"]:
 
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
+from concurrent.futures import ThreadPoolExecutor
+
 # ==========================
 # DATA FETCHING
 # ==========================
 @st.cache_data(ttl=60)
 def get_dashboard_data():
-    jobs = fetch_all_from_table("job_management", select_fields="job_id, job_reference_no, job_status, openings, company_id, job_title_id, created_date, modified_date, created_by")
-    candidates = fetch_all_live_candidates("candidate_id, candidate_reference_no, first_name, last_name, job_id, current_stage, candidate_status, created_by_name, created_by_user_id, created_on, updated_on, mobile_no, email, current_company, current_designation, experience_years, experience_months, current_ctc, expected_ctc, notice_period, remarks")
-    interviews = fetch_all_from_table("interview_management", select_fields="interview_id, candidate_id, job_id, interview_round, interview_date, interview_status, feedback, created_by_name, created_on")
-    offers = fetch_all_from_table("offer_management", select_fields="offer_id, candidate_id, job_id, offer_status, offered_ctc, joining_date, remarks, created_by_name, created_on")
-    all_users = supabase.table("users").select("user_id, full_name, role").execute().data or []
-    job_titles = supabase.table("job_title_master").select("job_title_id, job_title_name").execute().data or []
-    companies = supabase.table("company_master").select("company_id, company_name").execute().data or []
-    job_assignments = supabase.table("job_assignment").select("job_id, user_id").execute().data or []
-    
-    return jobs, candidates, interviews, offers, all_users, job_titles, companies, job_assignments
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        fut_jobs = executor.submit(
+            fetch_all_from_table,
+            "job_management",
+            select_fields="job_id, job_reference_no, job_status, openings, company_id, job_title_id, created_date, modified_date, created_by"
+        )
+        # Fetch ALL candidates regardless of job status for accurate KPI counting (hired on closed jobs must still count)
+        fut_candidates = executor.submit(
+            fetch_all_from_table,
+            "candidate_management",
+            select_fields="candidate_id, candidate_reference_no, first_name, last_name, job_id, current_stage, candidate_status, created_by_name, created_by_user_id, created_on, updated_on, mobile_no, email, current_company, current_designation, experience_years, experience_months, current_ctc, expected_ctc, notice_period, remarks",
+            order_by="candidate_id",
+            desc=True
+        )
+        fut_interviews = executor.submit(
+            fetch_all_from_table,
+            "interview_management",
+            select_fields="interview_id, candidate_id, job_id, interview_round, interview_date, interview_status, feedback, created_by_name, created_on"
+        )
+        fut_offers = executor.submit(
+            fetch_all_from_table,
+            "offer_management",
+            select_fields="offer_id, candidate_id, job_id, offer_status, offered_ctc, joining_date, remarks, created_by_name, created_on"
+        )
+        fut_users = executor.submit(lambda: supabase.table("users").select("user_id, full_name, role").execute().data or [])
+        fut_titles = executor.submit(lambda: supabase.table("job_title_master").select("job_title_id, job_title_name").execute().data or [])
+        fut_comps = executor.submit(lambda: supabase.table("company_master").select("company_id, company_name").execute().data or [])
+        fut_assigns = executor.submit(lambda: supabase.table("job_assignment").select("job_id, user_id").execute().data or [])
+
+    return (
+        fut_jobs.result(),
+        fut_candidates.result(),
+        fut_interviews.result(),
+        fut_offers.result(),
+        fut_users.result(),
+        fut_titles.result(),
+        fut_comps.result(),
+        fut_assigns.result()
+    )
 
 jobs, candidates, interviews, offers, all_users, job_titles, companies, job_assignments = get_dashboard_data()
 
@@ -120,9 +151,6 @@ job_lookup = {}
 all_job_labels_map = {}
 all_label_to_job_id = {}
 for job in jobs:
-    # Strictly only include Open jobs in lookups and dropdowns (exclude Closed, Hold, On Hold, Cancelled)
-    if str(job.get("job_status") or "").strip().lower() != "open":
-        continue
     title = job_title_lookup.get(job["job_title_id"], "Unknown")
     label = f"{job['job_reference_no']} | {title}"
     job_lookup[job["job_id"]] = label
@@ -230,7 +258,7 @@ f_col1, f_col2, f_col3, f_col4, f_col5 = st.columns([1.5, 2, 2, 2, 2.5])
 with f_col1:
     use_date_filter = st.checkbox("📅 Date Filter", value=False)
 with f_col2:
-    from_date = st.date_input("From Date", value=date(2026, 1, 1), disabled=not use_date_filter)
+    from_date = st.date_input("From Date", value=date(date.today().year, 1, 1), disabled=not use_date_filter)
 with f_col3:
     to_date = st.date_input("To Date", value=date.today(), disabled=not use_date_filter)
 with f_col4:
@@ -247,11 +275,9 @@ selected_job_id = all_label_to_job_id.get(job_filter) if job_filter != "All Jobs
 selected_rec_uid = recruiter_user_map.get(recruiter_filter) if recruiter_filter != "All Recruiters" else None
 rec_associated_job_ids = rec_uid_to_job_ids.get(selected_rec_uid, set()) if selected_rec_uid else set()
 
-# 1. Filter Jobs (strictly only Open jobs - exclude Closed, Hold, On Hold, Cancelled)
+# 1. Filter Jobs
 filtered_jobs = []
 for j in jobs:
-    if str(j.get("job_status") or "").strip().lower() != "open":
-        continue
     jid = j.get("job_id")
     job_created_date = parse_date(j.get("created_date"))
     
@@ -270,12 +296,10 @@ for j in jobs:
 
 filtered_job_ids = {j["job_id"] for j in filtered_jobs}
 
-# 2. Filter Candidates (strictly only candidates on Open jobs)
+# 2. Filter Candidates
 filtered_candidates = []
 for c in candidates:
     c_jid = safe_int(c.get("job_id"))
-    if c_jid and str(job_status_lookup.get(c_jid, "")).strip().lower() != "open":
-        continue
     cand_date = parse_date(c.get("created_on")) or parse_date(c.get("updated_on"))
     
     if use_date_filter and cand_date:
@@ -299,14 +323,94 @@ filtered_candidate_ids = {c["candidate_id"] for c in filtered_candidates}
 filtered_interviews = [i for i in interviews if i.get("candidate_id") in filtered_candidate_ids]
 filtered_offers = [o for o in offers if o.get("candidate_id") in filtered_candidate_ids]
 
+# Helpers for offer & hired status evaluation
+def is_candidate_hired(c):
+    cid = c.get("candidate_id")
+    off = offer_map.get(cid)
+    off_status = (off.get("offer_status") or "").strip() if off else ""
+    stage = (c.get("current_stage") or "").strip()
+    status = (c.get("candidate_status") or "").strip()
+    return off_status in ["Joined", "Hired"] or stage in ["Joined", "Hired"] or status in ["Joined", "Hired"]
+
+def is_candidate_offer_released(c):
+    cid = c.get("candidate_id")
+    off = offer_map.get(cid)
+    off_status = (off.get("offer_status") or "").strip() if off else ""
+    stage = (c.get("current_stage") or "").strip()
+    status = (c.get("candidate_status") or "").strip()
+    
+    # If candidate is already joined/hired, they are Hired, not pending Offer Released
+    if is_candidate_hired(c):
+        return False
+        
+    # If offer was rejected or candidate no-showed, they are not in active Offer Released
+    if off_status in ["Offer Rejected", "Declined", "Revoked", "No Show"] or status in ["Offer Rejected", "Declined", "Rejected", "No Show"] or stage in ["Offer Rejected", "Declined", "Rejected"]:
+        return False
+        
+    # Active released offer awaiting candidate response or joining
+    if off_status in ["Offer Released", "Offered", "Offer Sent", "Sent to Candidate"]:
+        return True
+    if not off_status and (stage in ["Offer", "Offer Released"] or status in ["Offer Released", "Offered"]):
+        return True
+    return False
+
 # ==========================
 # TOP LEVEL METRICS (5 CARDS)
 # ==========================
-open_jobs = len([j for j in filtered_jobs if j.get("job_status") == "Open"])
+# KPI counts for Hired & Offer Released use ALL candidates (including those on closed jobs)
+# so that auto-closed jobs don't hide real hiring data. Other counts respect the filter.
+open_jobs = len([j for j in filtered_jobs if str(j.get("job_status") or "").strip().lower() == "open"])
 total_candidates = len(filtered_candidates)
 active_interviews = len(filtered_interviews)
-offer_released_count = len([c for c in filtered_candidates if c.get("current_stage") in ["Offer", "Offer Released", "Offer Accepted", "Offer Rejected", "Joined", "Hired"] or c.get("candidate_status") in ["Offer", "Offer Released", "Offer Accepted", "Offer Rejected", "Joined", "Hired"]])
-total_hired = len([c for c in filtered_candidates if c.get("current_stage") in ["Joined", "Hired"] or c.get("candidate_status") in ["Joined", "Hired"]])
+
+# For Hired & Offer Released: apply only recruiter/job filter (not job-status filter)
+# so candidates on auto-closed jobs are still counted correctly.
+kpi_candidate_pool = []
+for c in candidates:
+    c_jid = safe_int(c.get("job_id"))
+    cand_date = parse_date(c.get("created_on")) or parse_date(c.get("updated_on"))
+    if use_date_filter and cand_date:
+        if cand_date < from_date or cand_date > to_date:
+            continue
+    if selected_job_id is not None and c_jid != selected_job_id:
+        continue
+    if recruiter_filter != "All Recruiters":
+        cand_rec = get_candidate_recruiter_display(c)
+        req_rec_name = recruiter_filter.strip().lower()
+        cand_rec_list = [r.strip().lower() for r in cand_rec.split(",")]
+        if req_rec_name not in cand_rec_list:
+            continue
+    kpi_candidate_pool.append(c)
+
+# KPI offer map covers all offers (not just open-job candidates)
+kpi_offer_map = {o["candidate_id"]: o for o in offers if o.get("candidate_id")}
+
+def is_kpi_candidate_hired(c):
+    cid = c.get("candidate_id")
+    off = kpi_offer_map.get(cid)
+    off_status = (off.get("offer_status") or "").strip() if off else ""
+    stage = (c.get("current_stage") or "").strip()
+    status = (c.get("candidate_status") or "").strip()
+    return off_status in ["Joined", "Hired"] or stage in ["Joined", "Hired"] or status in ["Joined", "Hired"]
+
+def is_kpi_offer_released(c):
+    cid = c.get("candidate_id")
+    off = kpi_offer_map.get(cid)
+    off_status = (off.get("offer_status") or "").strip() if off else ""
+    stage = (c.get("current_stage") or "").strip()
+    status = (c.get("candidate_status") or "").strip()
+    if is_kpi_candidate_hired(c):
+        return False
+    if off_status in ["Offer Rejected", "Declined", "Revoked", "No Show"] or status in ["Offer Rejected", "Declined", "Rejected", "No Show"] or stage in ["Offer Rejected", "Declined", "Rejected"]:
+        return False
+    if off_status in ["Offer Released", "Offered", "Offer Sent", "Sent to Candidate"]:
+        return True
+    if not off_status and (stage in ["Offer", "Offer Released"] or status in ["Offer Released", "Offered"]):
+        return True
+    return False
+
+offer_released_count = len([c for c in kpi_candidate_pool if is_kpi_offer_released(c)])
+total_hired = len([c for c in kpi_candidate_pool if is_kpi_candidate_hired(c)])
 
 col1, col2, col3, col4, col5 = st.columns(5)
 with col1:
@@ -333,9 +437,15 @@ with chart_col1:
     pipeline_counts = {stage: 0 for stage in stages}
     
     for c in filtered_candidates:
-        stage = c.get("current_stage")
-        if stage in pipeline_counts:
-            pipeline_counts[stage] += 1
+        if is_candidate_hired(c):
+            effective_stage = "Joined"
+        elif is_candidate_offer_released(c):
+            effective_stage = "Offer"
+        else:
+            effective_stage = c.get("current_stage")
+            
+        if effective_stage in pipeline_counts:
+            pipeline_counts[effective_stage] += 1
             
     funnel_df = pd.DataFrame({
         "Stage": list(pipeline_counts.keys()),
@@ -390,8 +500,8 @@ for recruiter in recruiters:
     pipeline_total = len(r_cands)
     shortlisted = len([c for c in r_cands if c.get("current_stage") == "Shortlisted" or c.get("candidate_status") == "Shortlisted"])
     interviews_cnt = len([c for c in r_cands if c.get("current_stage") == "Interview"])
-    offers_cnt = len([c for c in r_cands if c.get("current_stage") == "Offer" or c.get("candidate_status") in ["Offer Released", "Offer Accepted"]])
-    hires = len([c for c in r_cands if c.get("current_stage") == "Joined" or c.get("candidate_status") in ["Joined", "Hired"]])
+    offers_cnt = len([c for c in r_cands if is_candidate_offer_released(c)])
+    hires = len([c for c in r_cands if is_candidate_hired(c)])
     
     conversion = (hires / pipeline_total * 100) if pipeline_total > 0 else 0
     
@@ -593,7 +703,7 @@ with radar_tab2:
             off_status = c_stage
             
         is_in_offer_flight = off_status in ["Offered", "Offer Released", "Sent to Candidate", "Offer Sent", "Offer Accepted", "Offer"]
-        is_not_joined = c_stage not in ["Joined", "Hired"] and c_status not in ["Joined", "Hired"]
+        is_not_joined = not is_candidate_hired(c)
         is_not_declined = (
             off_status not in ["Offer Rejected", "Declined", "Revoked"]
             and c_status not in ["Offer Rejected", "Declined", "Rejected"]
@@ -921,14 +1031,14 @@ for job in workplan_jobs:
         # Offer & Joining aggregations
         effective_status = off_status or status
         
-        if effective_status == "Offer Released" or (stage == "Offer" and not off_status):
+        if is_candidate_hired(c):
+            joined_cnt += 1
+        elif is_candidate_offer_released(c):
             offer_released_cnt += 1
         elif effective_status == "Offer Accepted":
             offer_accepted_cnt += 1
-        elif effective_status == "Offer Rejected":
+        elif effective_status == "Offer Rejected" or stage == "Offer Rejected":
             offer_rejected_cnt += 1
-        elif effective_status in ["Joined", "Hired"] or stage == "Joined":
-            joined_cnt += 1
         elif effective_status == "No Show":
             no_show_cnt += 1
 

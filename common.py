@@ -1,30 +1,39 @@
 import os
+import re
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import streamlit as st
 from db import supabase
+
+@st.cache_resource
+def get_cached_logo_b64() -> str:
+    """Reads and encodes the company logo once, caching the base64 string in memory."""
+    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo.png")
+    if not os.path.exists(logo_path):
+        return ""
+    try:
+        with open(logo_path, "rb") as f:
+            return base64.b64encode(f.read()).decode("utf-8")
+    except Exception:
+        return ""
 
 def render_logo(width=220, align="left"):
     """
     Renders the unified 1 Point Solution company logo with 100% alpha transparency.
+    Uses cached in-memory base64 to avoid repetitive disk I/O on every page click/rerun.
     """
-    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo.png")
-    if not os.path.exists(logo_path):
+    b64 = get_cached_logo_b64()
+    if not b64:
         return
         
-    try:
-        with open(logo_path, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode("utf-8")
-            
-        st.markdown(
-            f"""
-            <div class="ats-logo-wrapper" style="text-align: {align}; margin-bottom: 12px;">
-                <img src="data:image/png;base64,{b64}" style="width: {width}px; max-width: 100%; height: auto;" />
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-    except Exception:
-        pass
+    st.markdown(
+        f"""
+        <div class="ats-logo-wrapper" style="text-align: {align}; margin-bottom: 12px;">
+            <img src="data:image/png;base64,{b64}" style="width: {width}px; max-width: 100%; height: auto;" />
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
 def show_user_profile():
     """Displays company logo and the logged-in user's name and role at the top of the sidebar."""
@@ -78,6 +87,7 @@ def get_recruiter_notification_data(user_id):
     
     return jobs, jobs_with_candidates, title_lookup, company_lookup
 
+@st.fragment
 def show_job_notifications():
     """Renders a notification bell in the sidebar for newly assigned jobs."""
     if not st.session_state.get("logged_in", False):
@@ -210,29 +220,102 @@ def render_pagination(items, page_size_default=25, key_prefix="page", page_size_
     return page_items, current_page, total_pages
 
 
-def clear_data_cache():
-    """Safely clears Streamlit data cache when mutations occur (Insert/Update/Delete)."""
+@st.fragment
+def render_paginated_section(
+    items,
+    render_row_fn,
+    page_size_default=25,
+    key_prefix="page",
+    page_size_options=[25, 50, 100],
+    render_header_fn=None,
+    empty_message="No records found."
+):
+    """
+    Renders pagination controls and iterates rows inside an isolated @st.fragment.
+    When users click Prev/Next or change page size, only this fragment re-renders,
+    keeping page switches instant without triggering full-page reruns.
+    """
+    total_items = len(items) if items is not None else 0
+    if total_items == 0:
+        st.info(empty_message)
+        return
+
+    page_items, current_page, total_pages = render_pagination(
+        items, page_size_default=page_size_default, key_prefix=key_prefix, page_size_options=page_size_options
+    )
+
+    if render_header_fn:
+        render_header_fn()
+
+    import inspect
+    sig = inspect.signature(render_row_fn)
+    takes_idx = len(sig.parameters) >= 2
+
+    # Calculate starting index (1-based) for row numbering
+    page_size = page_size_default
+    size_key = f"{key_prefix}_size_select"
+    if size_key in st.session_state and st.session_state[size_key] in page_size_options:
+        page_size = st.session_state[size_key]
+    start_num = (current_page - 1) * page_size + 1
+
+    if hasattr(page_items, "iterrows"):
+        for offset, (_, row) in enumerate(page_items.iterrows()):
+            if takes_idx:
+                render_row_fn(row, start_num + offset)
+            else:
+                render_row_fn(row)
+    else:
+        for offset, item in enumerate(page_items):
+            if takes_idx:
+                render_row_fn(item, start_num + offset)
+            else:
+                render_row_fn(item)
+
+
+
+def clear_data_cache(entity: str = None):
+    """
+    Selectively clears Streamlit data cache for mutated entities without wiping unaffected caches.
+    entity options: 'jobs', 'candidates', 'lookups', or None (clears all operational data).
+    """
     try:
-        st.cache_data.clear()
+        if entity == "lookups":
+            get_master_lookups.clear()
+        elif entity == "jobs":
+            fetch_all_from_table.clear()
+            get_recruiter_notification_data.clear()
+        elif entity == "candidates":
+            fetch_all_live_candidates.clear()
+            fetch_all_legacy_candidates.clear()
+            get_unified_candidate_pool.clear()
+            fetch_all_from_table.clear()
+        else:
+            fetch_all_from_table.clear()
+            fetch_all_live_candidates.clear()
+            fetch_all_legacy_candidates.clear()
+            get_unified_candidate_pool.clear()
+            get_recruiter_notification_data.clear()
     except Exception:
         pass
 
 
 @st.cache_data(ttl=120)
 def get_master_lookups():
-    """Fetches and caches master table lookups to avoid redundant database calls."""
+    """Fetches and caches master table lookups concurrently using ThreadPoolExecutor."""
     try:
-        companies = supabase.table("company_master").select("company_id, company_name").execute().data or []
-        job_titles = supabase.table("job_title_master").select("job_title_id, job_title_name").execute().data or []
-        categories = supabase.table("category_master").select("category_id, category_name").execute().data or []
-        sub_categories = supabase.table("sub_category_master").select("sub_category_id, category_id, sub_category_name").execute().data or []
-        users = supabase.table("users").select("user_id, full_name, email, role").execute().data or []
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            fut_comp = executor.submit(lambda: supabase.table("company_master").select("*").order("company_name").execute().data or [])
+            fut_jt = executor.submit(lambda: supabase.table("job_title_master").select("*").order("job_title_name").execute().data or [])
+            fut_cat = executor.submit(lambda: supabase.table("category_master").select("*").order("category_name").execute().data or [])
+            fut_scat = executor.submit(lambda: supabase.table("sub_category_master").select("*").order("sub_category_name").execute().data or [])
+            fut_users = executor.submit(lambda: supabase.table("users").select("user_id, full_name, email, role, status").execute().data or [])
+            
         return {
-            "companies": companies,
-            "job_titles": job_titles,
-            "categories": categories,
-            "sub_categories": sub_categories,
-            "users": users
+            "companies": fut_comp.result(),
+            "job_titles": fut_jt.result(),
+            "categories": fut_cat.result(),
+            "sub_categories": fut_scat.result(),
+            "users": fut_users.result()
         }
     except Exception:
         return {"companies": [], "job_titles": [], "categories": [], "sub_categories": [], "users": []}
@@ -271,6 +354,61 @@ def fetch_all_live_candidates(select_fields: str):
     Paginates through candidate_management table in Supabase to fetch ALL live candidate rows.
     """
     return fetch_all_from_table("candidate_management", select_fields=select_fields, order_by="candidate_id", desc=True)
+
+
+@st.cache_data(ttl=120)
+def get_unified_candidate_pool():
+    """
+    Single source of truth for unified active + legacy candidate pool.
+    Used concurrently across Job Matching (4_Job_Management) and AI Semantic Search (5_Candidate_Management).
+    Eliminates duplicated in-memory fetches and reduces RAM usage.
+    """
+    inactive_statuses = {"retired", "deceased", "blacklisted", "inactive", "inactive / left market"}
+    all_pool = []
+    live_ids = set()
+
+    try:
+        fields_live = "candidate_id, candidate_reference_no, first_name, last_name, gender, approx_dob, email, mobile_no, current_company, current_designation, skills, experience_years, experience_months, current_ctc, expected_ctc, current_location, candidate_status, current_stage, resume_path, job_id, created_by_name, created_by_user_id, created_on, remarks"
+        live_data = fetch_all_live_candidates(fields_live)
+        for c in live_data:
+            c_status = (c.get("candidate_status") or "").strip().lower()
+            c_stage = (c.get("current_stage") or "").strip().lower()
+            if c_status in inactive_statuses or c_stage in inactive_statuses:
+                continue
+            c["source_pool"] = "Live Pool"
+            c["is_legacy"] = False
+            live_ids.add(c["candidate_id"])
+            all_pool.append(c)
+    except Exception:
+        pass
+
+    try:
+        fields_legacy = "legacy_candidate_id, candidate_reference_no, first_name, last_name, gender, approx_dob, email, mobile_no, current_company, current_designation, skills, experience_years, experience_months, current_ctc, expected_ctc, current_location, notice_period, notice_negotiable, qualification, education_details, resume_name, resume_path, is_migrated_to_active, migrated_candidate_id"
+        legacy_data = fetch_all_legacy_candidates(fields_legacy)
+        for c in legacy_data:
+            if c.get("is_migrated_to_active") and c.get("migrated_candidate_id") in live_ids:
+                continue
+            c["candidate_id"] = f"LEG_{c['legacy_candidate_id']}"
+            c["source_pool"] = "Legacy Pool"
+            c["is_legacy"] = True
+
+            nn = str(c.get("notice_negotiable") or "").strip()
+            if nn.startswith("Deactivated:"):
+                deact_status = nn.replace("Deactivated:", "").strip()
+                if deact_status.lower() in inactive_statuses:
+                    continue
+                c["candidate_status"] = deact_status
+                c["current_stage"] = deact_status
+            else:
+                c["candidate_status"] = "Archived"
+                c["current_stage"] = "Legacy Archive"
+
+            c["job_id"] = None
+            all_pool.append(c)
+    except Exception:
+        pass
+
+    return all_pool
 
 
 @st.cache_data(ttl=60)
@@ -316,7 +454,10 @@ def fetch_candidates_server_side(
         q = supabase.table("candidate_management").select(select_fields, count="exact")
         
         if status_filter != "All Status":
-            q = q.or_(f"candidate_status.eq.{status_filter},current_stage.eq.{status_filter}")
+            if status_filter in ["Joined / Hired", "Joined", "Hired"]:
+                q = q.or_("candidate_status.in.(Joined,Hired),current_stage.in.(Joined,Hired)")
+            else:
+                q = q.or_(f"candidate_status.eq.{status_filter},current_stage.eq.{status_filter}")
             
         if gender_filter != "All Genders":
             q = q.eq("gender", gender_filter)
@@ -328,16 +469,18 @@ def fetch_candidates_server_side(
             q = q.eq("created_by_name", recruiter_filter)
             
         if search_text and search_text.strip():
-            st_clean = search_text.strip()
-            q = q.or_(
-                f"candidate_reference_no.ilike.%{st_clean}%,"
-                f"first_name.ilike.%{st_clean}%,"
-                f"last_name.ilike.%{st_clean}%,"
-                f"email.ilike.%{st_clean}%,"
-                f"mobile_no.ilike.%{st_clean}%,"
-                f"current_company.ilike.%{st_clean}%,"
-                f"skills.ilike.%{st_clean}%"
-            )
+            # Sanitize search text: strip PostgREST structural delimiter characters (, and parentheses)
+            st_clean = re.sub(r'[,()]', '', search_text.strip())
+            if st_clean:
+                q = q.or_(
+                    f"candidate_reference_no.ilike.%{st_clean}%,"
+                    f"first_name.ilike.%{st_clean}%,"
+                    f"last_name.ilike.%{st_clean}%,"
+                    f"email.ilike.%{st_clean}%,"
+                    f"mobile_no.ilike.%{st_clean}%,"
+                    f"current_company.ilike.%{st_clean}%,"
+                    f"skills.ilike.%{st_clean}%"
+                )
             
         start_idx = (page - 1) * page_size
         end_idx = start_idx + page_size - 1

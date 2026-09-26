@@ -3,7 +3,7 @@ import pandas as pd
 import re
 from db import supabase
 from datetime import date
-from common import show_logout, show_job_notifications, show_user_profile, render_pagination
+from common import show_logout, show_job_notifications, show_user_profile, render_pagination, render_paginated_section
 import bcrypt
 from theme import apply_theme
 
@@ -321,30 +321,13 @@ with left_col:
                 value=date.today()
             )
 
-        col1, col2 = st.columns(2)
-
-        submit_btn = col1.form_submit_button(
+        submit_btn = st.form_submit_button(
             "Update User"
             if editing
-            else "Add User"
+            else "Add User",
+            use_container_width=True,
+            type="primary"
         )
-
-        cancel_btn = False
-
-        if editing:
-
-            cancel_btn = col2.form_submit_button(
-                "Cancel Edit"
-            )
-
-        # ==========================
-        # CANCEL EDIT
-        # ==========================
-
-        if cancel_btn:
-
-            st.session_state.edit_user_id = None
-            st.rerun()
 
         # ==========================
         # SAVE
@@ -490,6 +473,11 @@ with left_col:
                 except Exception as e:
 
                     st.error(str(e))
+    
+    if editing:
+        if st.button("❌ Cancel Edit", use_container_width=True):
+            st.session_state.edit_user_id = None
+            st.rerun()
 
 @st.cache_data(ttl=10)
 def get_all_users():
@@ -551,21 +539,19 @@ with right_col:
             if status_filter != "All":
                 df = df[df["status"] == status_filter]
 
-            display_df, current_page, total_pages = render_pagination(df, page_size_default=25, key_prefix="users")
+            def render_user_header():
+                header = st.columns([0.5, 2, 3, 1.5, 1.5, 1, 1, 1])
+                header[0].markdown("**ID**")
+                header[1].markdown("**Name**")
+                header[2].markdown("**Email**")
+                header[3].markdown("**Role**")
+                header[4].markdown("**Status**")
+                header[5].markdown("**Edit**")
+                header[6].markdown("**Reset**")
+                header[7].markdown("**Status**")
+                st.divider()
 
-            header = st.columns([0.5, 2, 3, 1.5, 1.5, 1, 1, 1])
-            header[0].markdown("**ID**")
-            header[1].markdown("**Name**")
-            header[2].markdown("**Email**")
-            header[3].markdown("**Role**")
-            header[4].markdown("**Status**")
-            header[5].markdown("**Edit**")
-            header[6].markdown("**Reset**")
-            header[7].markdown("**Status**")
-
-            st.divider()
-
-            for _, row in display_df.iterrows():
+            def render_user_row(row):
                 cols = st.columns([0.5, 2, 3, 1.5, 1.5, 1, 1, 1])
                 cols[0].write(row["user_id"])
                 cols[1].write(row["full_name"])
@@ -590,7 +576,7 @@ with right_col:
                 if is_developer or not is_row_dev:
                     if cols[5].button("✏️", key=f"edit_{row['user_id']}", help="Edit User"):
                         st.session_state.edit_user_id = row["user_id"]
-                        st.rerun()
+                        st.rerun(scope="app")
                 else:
                     cols[5].markdown("<div title='Only a Developer can edit Developer accounts' style='margin-top:2px; font-size:16px; cursor:help;'>🔒</div>", unsafe_allow_html=True)
 
@@ -598,7 +584,7 @@ with right_col:
                 if is_developer or not is_row_dev:
                     if cols[6].button("🔑", key=f"reset_{row['user_id']}", help="Reset Password"):
                         st.session_state.reset_user_id = row["user_id"]
-                        st.rerun()
+                        st.rerun(scope="app")
                 else:
                     cols[6].markdown("<div title='Only a Developer can reset Developer passwords' style='margin-top:2px; font-size:16px; cursor:help;'>🔒</div>", unsafe_allow_html=True)
 
@@ -618,7 +604,7 @@ with right_col:
                             )
                             st.success(f"{row['full_name']} deactivated successfully.")
                             st.cache_data.clear()
-                            st.rerun()
+                            st.rerun(scope="app")
                     else:
                         if cols[7].button("🔓", key=f"activate_{row['user_id']}", help="Activate User"):
                             (
@@ -633,9 +619,18 @@ with right_col:
                             )
                             st.success(f"{row['full_name']} activated successfully.")
                             st.cache_data.clear()
-                            st.rerun()
+                            st.rerun(scope="app")
                 else:
                     cols[7].markdown("<div title='Developer accounts cannot be deactivated by Admins' style='margin-top:2px; font-size:16px; cursor:help;'>🔒</div>", unsafe_allow_html=True)
+
+            render_paginated_section(
+                df,
+                render_user_row,
+                page_size_default=25,
+                key_prefix="users",
+                render_header_fn=render_user_header,
+                empty_message="No employees found."
+            )
         else:
             st.info("No employees found.")
 

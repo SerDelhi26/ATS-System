@@ -25,6 +25,13 @@ def apply_theme():
         display: none !important;
     }
 
+    /* Suppress Streamlit's transient missing submit button warning in forms */
+    div[data-testid="stForm"] .stAlert,
+    div[data-testid="stForm"] div:has(> [data-testid="stAlert"]),
+    .stForm > div:has(> [data-testid="stAlert"]) {
+        display: none !important;
+    }
+
     </style>
     """,
     unsafe_allow_html=True)
