@@ -1,6 +1,53 @@
 import streamlit as st
 from db import supabase
-from common import show_logout, show_job_notifications, show_user_profile, render_pagination, render_paginated_section, fetch_all_from_table, clear_data_cache
+from common import show_logout, show_job_notifications, show_user_profile, render_pagination, fetch_all_from_table, clear_data_cache
+
+try:
+    from common import render_paginated_section
+except (ImportError, AttributeError):
+    def render_paginated_section(
+        items,
+        render_row_fn,
+        page_size_default=25,
+        key_prefix="page",
+        page_size_options=[25, 50, 100],
+        render_header_fn=None,
+        empty_message="No records found."
+    ):
+        total_items = len(items) if items is not None else 0
+        if total_items == 0:
+            st.info(empty_message)
+            return
+
+        page_items, current_page, total_pages = render_pagination(
+            items, page_size_default=page_size_default, key_prefix=key_prefix, page_size_options=page_size_options
+        )
+
+        if render_header_fn:
+            render_header_fn()
+
+        import inspect
+        sig = inspect.signature(render_row_fn)
+        takes_idx = len(sig.parameters) >= 2
+
+        page_size = page_size_default
+        size_key = f"{key_prefix}_size_select"
+        if size_key in st.session_state and st.session_state[size_key] in page_size_options:
+            page_size = st.session_state[size_key]
+        start_num = (current_page - 1) * page_size + 1
+
+        if hasattr(page_items, "iterrows"):
+            for offset, (_, row) in enumerate(page_items.iterrows()):
+                if takes_idx:
+                    render_row_fn(row, start_num + offset)
+                else:
+                    render_row_fn(row)
+        else:
+            for offset, item in enumerate(page_items):
+                if takes_idx:
+                    render_row_fn(item, start_num + offset)
+                else:
+                    render_row_fn(item)
 from datetime import date, datetime
 from theme import apply_theme
 
