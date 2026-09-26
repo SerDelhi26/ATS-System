@@ -220,7 +220,6 @@ def render_pagination(items, page_size_default=25, key_prefix="page", page_size_
     return page_items, current_page, total_pages
 
 
-@st.fragment
 def render_paginated_section(
     items,
     render_row_fn,
