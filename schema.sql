@@ -441,6 +441,8 @@ BEGIN
         locked_until = CASE 
             WHEN (CASE WHEN login_attempts.locked_until IS NOT NULL AND login_attempts.locked_until <= now_time THEN 1 ELSE login_attempts.failed_count + 1 END) >= max_attempts 
             THEN now_time + (lockout_duration_seconds || ' seconds')::INTERVAL
+            WHEN login_attempts.locked_until IS NOT NULL AND login_attempts.locked_until <= now_time
+            THEN NULL
             ELSE login_attempts.locked_until
         END
     RETURNING login_attempts.failed_count, login_attempts.locked_until INTO rec;
@@ -471,8 +473,12 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION public.record_login_failure(TEXT, INT, INT) TO anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.clear_login_attempts(TEXT) TO anon, authenticated, service_role;
+-- Revoke permissions from anon and authenticated; restrict exclusively to service_role
+REVOKE EXECUTE ON FUNCTION public.record_login_failure(TEXT, INT, INT) FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.clear_login_attempts(TEXT) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.record_login_failure(TEXT, INT, INT) TO service_role;
+GRANT EXECUTE ON FUNCTION public.clear_login_attempts(TEXT) TO service_role;
+
 
 
 

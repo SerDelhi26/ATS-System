@@ -1,5 +1,12 @@
 import streamlit as st
-from common import show_logout, show_job_notifications, show_user_profile, fetch_all_live_candidates, fetch_all_from_table
+from common import (
+    show_logout, 
+    show_job_notifications, 
+    show_user_profile, 
+    fetch_all_live_candidates, 
+    fetch_all_from_table,
+    get_dashboard_data
+)
 from db import supabase
 import pandas as pd
 import plotly.express as px
@@ -85,54 +92,16 @@ if st.session_state.get("user_role") not in ["Admin", "Developer", "Admin-Lite"]
 
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
-from concurrent.futures import ThreadPoolExecutor
-
 # ==========================
 # DATA FETCHING
 # ==========================
-@st.cache_data(ttl=180, show_spinner=False)
-def get_dashboard_data():
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        fut_jobs = executor.submit(
-            fetch_all_from_table,
-            "job_management",
-            select_fields="job_id, job_reference_no, job_status, openings, company_id, job_title_id, created_date, modified_date, created_by"
-        )
-        # Fetch ALL candidates regardless of job status for accurate KPI counting (hired on closed jobs must still count)
-        fut_candidates = executor.submit(
-            fetch_all_from_table,
-            "candidate_management",
-            select_fields="candidate_id, candidate_reference_no, first_name, last_name, job_id, current_stage, candidate_status, created_by_name, created_by_user_id, created_on, updated_on, mobile_no, email, current_company, current_designation, experience_years, experience_months, current_ctc, expected_ctc, notice_period, remarks",
-            order_by="candidate_id",
-            desc=True
-        )
-        fut_interviews = executor.submit(
-            fetch_all_from_table,
-            "interview_management",
-            select_fields="interview_id, candidate_id, job_id, interview_round, interview_date, interview_status, feedback, created_by_name, created_on"
-        )
-        fut_offers = executor.submit(
-            fetch_all_from_table,
-            "offer_management",
-            select_fields="offer_id, candidate_id, job_id, offer_status, offered_ctc, joining_date, remarks, created_by_name, created_on"
-        )
-        fut_users = executor.submit(lambda: supabase.table("users").select("user_id, full_name, role").execute().data or [])
-        fut_titles = executor.submit(lambda: supabase.table("job_title_master").select("job_title_id, job_title_name").execute().data or [])
-        fut_comps = executor.submit(lambda: supabase.table("company_master").select("company_id, company_name").execute().data or [])
-        fut_assigns = executor.submit(lambda: supabase.table("job_assignment").select("job_id, user_id").execute().data or [])
+current_user_id = st.session_state.get("user_id")
+current_user_role = st.session_state.get("user_role", "Admin")
 
-    return (
-        fut_jobs.result(),
-        fut_candidates.result(),
-        fut_interviews.result(),
-        fut_offers.result(),
-        fut_users.result(),
-        fut_titles.result(),
-        fut_comps.result(),
-        fut_assigns.result()
-    )
-
-jobs, candidates, interviews, offers, all_users, job_titles, companies, job_assignments = get_dashboard_data()
+jobs, candidates, interviews, offers, all_users, job_titles, companies, job_assignments = get_dashboard_data(
+    user_id=current_user_id,
+    user_role=current_user_role
+)
 
 # Lookups
 admin_uids = {u["user_id"] for u in all_users if u.get("role") in ["Admin", "Developer"]}
