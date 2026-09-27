@@ -331,7 +331,7 @@ def get_master_lookups():
         return {"companies": [], "job_titles": [], "categories": [], "sub_categories": [], "users": []}
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_all_legacy_candidates(select_fields: str):
     """
     Paginates through legacy_candidates table in Supabase to fetch ALL rows,
@@ -359,9 +359,10 @@ def fetch_all_legacy_candidates(select_fields: str):
     return all_data
 
 
+@st.cache_data(ttl=120, show_spinner=False)
 def fetch_all_live_candidates(select_fields: str):
     """
-    Paginates through candidate_management table in Supabase to fetch ALL live candidate rows.
+    Paginates through candidate_management table in Supabase to fetch ALL live candidate rows. Cached for performance.
     """
     return fetch_all_from_table("candidate_management", select_fields=select_fields, order_by="candidate_id", desc=True)
 
