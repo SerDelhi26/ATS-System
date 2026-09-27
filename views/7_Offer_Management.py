@@ -1,6 +1,6 @@
 import streamlit as st
 from db import supabase
-from common import show_logout, show_job_notifications, show_user_profile, render_pagination, fetch_all_from_table, clear_data_cache
+from common import show_logout, show_job_notifications, show_user_profile, render_pagination, fetch_all_from_table, fetch_all_live_candidates, clear_data_cache
 
 try:
     from common import render_paginated_section
@@ -174,39 +174,11 @@ def get_all_users():
     except Exception:
         return []
 
-# NO CACHE - Always fetches live data for the right-hand grid!
 def get_candidate_lookup():
-    all_data = []
-    chunk_size = 1000
-    start = 0
-    while True:
-        try:
-            res = (
-                supabase
-                .table("candidate_management")
-                .select(
-                    """
-                    candidate_id,
-                    candidate_reference_no,
-                    first_name,
-                    last_name,
-                    current_stage,
-                    created_by_name,
-                    created_by_user_id
-                    """
-                )
-                .order("candidate_id", desc=True)
-                .range(start, start + chunk_size - 1)
-                .execute()
-            )
-            data = res.data or []
-            all_data.extend(data)
-            if len(data) < chunk_size:
-                break
-            start += chunk_size
-        except Exception:
-            break
-    return all_data
+    """Returns cached candidate data for quick lookup and UI locking, saving Supabase egress."""
+    return fetch_all_live_candidates(
+        "candidate_id, candidate_reference_no, first_name, last_name, current_stage, created_by_name, created_by_user_id"
+    )
 
 def update_candidate_stage(
     candidate_id,

@@ -40,7 +40,7 @@ from concurrent.futures import ThreadPoolExecutor
 # ==========================
 # OPTIMIZED FUNCTIONS (Targeted Columns & Concurrent Execution)
 # ==========================
-@st.cache_data(ttl=20)
+@st.cache_data(ttl=180, show_spinner=False)
 def get_report_data():
     try:
         with ThreadPoolExecutor(max_workers=6) as executor:
@@ -83,10 +83,16 @@ def parse_date(date_str):
 # ==========================
 candidates, jobs, job_titles, interviews, offers, users = get_report_data()
 
-if candidates:
-    st.caption(f"Total candidates in database: {len(candidates)}")
-else:
-    st.warning("No candidate data found in the database. Please check your Supabase connection.")
+col_rep_head1, col_rep_head2 = st.columns([5, 1])
+with col_rep_head1:
+    if candidates:
+        st.caption(f"Total candidates in database: {len(candidates)}")
+    else:
+        st.warning("No candidate data found in the database. Please check your Supabase connection.")
+with col_rep_head2:
+    if st.button("🔄 Refresh", help="Fetch the latest data from the database"):
+        get_report_data.clear()
+        st.rerun()
 
 # ==========================
 # LOOKUPS & MAPPINGS

@@ -90,7 +90,7 @@ from concurrent.futures import ThreadPoolExecutor
 # ==========================
 # DATA FETCHING
 # ==========================
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=180, show_spinner=False)
 def get_dashboard_data():
     with ThreadPoolExecutor(max_workers=8) as executor:
         fut_jobs = executor.submit(
@@ -133,6 +133,11 @@ def get_dashboard_data():
     )
 
 jobs, candidates, interviews, offers, all_users, job_titles, companies, job_assignments = get_dashboard_data()
+
+with st.sidebar:
+    if st.button("🔄 Refresh Metrics", use_container_width=True, help="Fetch fresh data from database"):
+        get_dashboard_data.clear()
+        st.rerun()
 
 # Lookups
 admin_uids = {u["user_id"] for u in all_users if u.get("role") in ["Admin", "Developer"]}

@@ -172,7 +172,7 @@ def insert_talent_mapping(record):
         record["created_on"] = datetime.utcnow().isoformat()
         record["updated_on"] = datetime.utcnow().isoformat()
         res = supabase.table("talent_mapping").insert(record).execute()
-        st.cache_data.clear()
+        fetch_talent_mappings.clear()
         return True, res.data
     except Exception as e:
         return False, str(e)
@@ -182,7 +182,7 @@ def update_talent_mapping(mapping_id, updates):
     try:
         updates["updated_on"] = datetime.utcnow().isoformat()
         res = supabase.table("talent_mapping").update(updates).eq("mapping_id", mapping_id).execute()
-        st.cache_data.clear()
+        fetch_talent_mappings.clear()
         return True, res.data
     except Exception as e:
         return False, str(e)
@@ -194,12 +194,12 @@ def delete_talent_mapping(mapping_id):
         supabase.table("talent_mapping").update({"reports_to_id": None}).eq("reports_to_id", mapping_id).execute()
         # Delete the record
         supabase.table("talent_mapping").delete().eq("mapping_id", mapping_id).execute()
-        st.cache_data.clear()
+        fetch_talent_mappings.clear()
         return True, "Deleted successfully"
     except Exception as e:
         return False, str(e)
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=180, show_spinner=False)
 def get_all_ats_candidates():
     """Fetches candidate names and profile details for smart auto-fill."""
     candidates = []
