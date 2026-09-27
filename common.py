@@ -37,6 +37,17 @@ def render_logo(width=220, align="left"):
 
 def show_user_profile():
     """Displays company logo and the logged-in user's name and role at the top of the sidebar."""
+    # Check 30-minute idle session timeout
+    if st.session_state.get("logged_in", False):
+        import time
+        now = time.time()
+        last_act = st.session_state.get("last_activity", now)
+        if now - last_act > 30 * 60:
+            st.session_state.clear()
+            st.session_state["session_timeout_msg"] = "🔒 Session expired due to 30 minutes of inactivity. Please log in again."
+            st.rerun()
+        st.session_state["last_activity"] = now
+
     with st.sidebar:
         render_logo(width=200, align="center")
 
@@ -96,7 +107,7 @@ def show_job_notifications():
     user_id = st.session_state.get("user_id")
     user_role = st.session_state.get("user_role")
     
-    if user_role != "Recruiter":
+    if user_role not in ["Recruiter", "Admin-Lite"]:
         return
 
     try:
@@ -410,7 +421,7 @@ def get_unified_candidate_pool():
     return all_pool
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=60, show_spinner=False)
 def fetch_all_from_table(table_name: str, select_fields: str = "*", order_by: str = None, desc: bool = False):
     """
     Paginates through any Supabase table to fetch ALL records cleanly,

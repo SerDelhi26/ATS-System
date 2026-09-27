@@ -88,7 +88,7 @@ st.set_page_config(
 apply_theme()
 
 # Data Protection: Hide table CSV hover toolbars for non-Admin/Developer users
-if st.session_state.get("user_role") not in ["Admin", "Developer"]:
+if st.session_state.get("user_role") not in ["Admin", "Developer", "Admin-Lite"]:
     st.markdown(
         """
         <style>
@@ -341,6 +341,7 @@ def parse_and_diff_excel(file_bytes, filename, existing_mappings):
             db_by_comp_cand[(comp_key, cand_key)] = m
 
     diff_list = []
+    actions_to_execute = []
     records = df_clean.to_dict(orient="records")
     for idx, row in enumerate(records):
         def get_row_val(field):
@@ -3693,7 +3694,7 @@ if st.session_state.tm_edit_node_id is not None:
 # ==============================================================================
 # 9. DUAL SYNCHRONIZED VIEWS: TABS (MASTER SHEET vs ORG CHART vs EXPORT)
 # ==============================================================================
-if st.session_state.get("user_role") in ["Admin", "Developer"]:
+if st.session_state.get("user_role") in ["Admin", "Developer", "Admin-Lite"]:
     view_tab_table, view_tab_graph, view_tab_export = st.tabs([
         "📋 Talent Mapping Master Sheet",
         "🌳 Visual Org Hierarchy Chart",

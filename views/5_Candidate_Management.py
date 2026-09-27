@@ -123,7 +123,7 @@ def get_jobs_for_user(
     user_role
 ):
 
-    if user_role in ["Admin", "Developer"]:
+    if user_role in ["Admin", "Developer", "Admin-Lite"]:
         return (
             supabase
             .table("job_management")
@@ -214,7 +214,7 @@ def get_recruiters():
         supabase
         .table("users")
         .select("full_name")
-        .eq("role", "Recruiter")
+        .in_("role", ["Recruiter", "Admin-Lite"])
         .execute()
         .data or []
     )
@@ -309,7 +309,7 @@ if st.session_state.edit_candidate_id:
         is_cand_locked, lock_reason = get_candidate_lock_info(candidate, job_status_map_init)
 
         is_authorized = (
-            st.session_state.user_role in ["Admin", "Developer"]
+            st.session_state.user_role in ["Admin", "Developer", "Admin-Lite"]
             or
             candidate.get("created_by_user_id")
             ==
@@ -328,7 +328,7 @@ if st.session_state.edit_candidate_id:
             st.stop()
 
         if is_cand_locked:
-            if st.session_state.user_role in ["Admin", "Developer"] and st.session_state.get("admin_unlocked_candidate_id") == candidate["candidate_id"]:
+            if st.session_state.user_role in ["Admin", "Developer", "Admin-Lite"] and st.session_state.get("admin_unlocked_candidate_id") == candidate["candidate_id"]:
                 editing = True
                 st.warning(f"⚠️ **Admin Override Active:** This profile is locked ({lock_reason}), but unlocked for this editing session under logged audit reason.")
             else:
@@ -832,7 +832,7 @@ with left_col:
         key=get_key("skills")
     )
 
-    is_admin_or_dev = st.session_state.get("user_role") in ["Admin", "Developer"]
+    is_admin_or_dev = st.session_state.get("user_role") in ["Admin", "Developer", "Admin-Lite"]
 
     candidate_status_options = [
         "New",
@@ -1432,7 +1432,7 @@ with left_col:
             # ==========================
             # STAGE-PROTECTION GUARD
             # ==========================
-            is_admin_or_dev = st.session_state.get("user_role") in ["Admin", "Developer"]
+            is_admin_or_dev = st.session_state.get("user_role") in ["Admin", "Developer", "Admin-Lite"]
 
             if editing:
                 existing_stage = str(candidate.get("current_stage") or "").strip()
@@ -1633,7 +1633,7 @@ with right_col:
         cur_c_job = st.session_state.get("cand_dir_job_filter", "All Jobs")
         cur_c_rec = st.session_state.get("cand_dir_rec_filter", "All Recruiters")
 
-        all_recruiters = sorted(list({user["full_name"] for user in get_recruiters()})) if st.session_state.user_role in ["Admin", "Developer"] else []
+        all_recruiters = sorted(list({user["full_name"] for user in get_recruiters()})) if st.session_state.user_role in ["Admin", "Developer", "Admin-Lite"] else []
 
         if cur_c_job != "All Jobs" and cur_c_job in cand_label_to_job_id:
             sel_jid = cand_label_to_job_id[cur_c_job]
@@ -1643,7 +1643,7 @@ with right_col:
                 assignments = supabase.table("job_assignment").select("user_id").eq("job_id", sel_jid).execute().data or []
                 rec_uids = {a["user_id"] for a in assignments}
                 if rec_uids:
-                    u_data = supabase.table("users").select("full_name").in_("user_id", list(rec_uids)).eq("role", "Recruiter").execute().data or []
+                    u_data = supabase.table("users").select("full_name").in_("user_id", list(rec_uids)).in_("role", ["Recruiter", "Admin-Lite"]).execute().data or []
                     assigned_recs = {u["full_name"] for u in u_data}
             except Exception:
                 pass
@@ -1679,7 +1679,7 @@ with right_col:
 
         with filter_col4:
             recruiter_filter = "All Recruiters"
-            if st.session_state.user_role in ["Admin", "Developer"]:
+            if st.session_state.user_role in ["Admin", "Developer", "Admin-Lite"]:
                 recruiter_filter = st.selectbox("Recruiter", recruiter_options, key="cand_dir_rec_filter")
 
         fields_main = "candidate_id, candidate_reference_no, job_id, first_name, last_name, gender, approx_dob, mobile_no, email, current_company, skills, candidate_status, current_stage, created_by_name, created_by_user_id, experience_years, experience_months, resume_path, remarks"
@@ -1817,12 +1817,12 @@ with right_col:
                 is_cand_locked, cand_lock_reason = get_candidate_lock_info(candidate, job_status_lookup)
 
                 is_user_authorized = (
-                    st.session_state.user_role in ["Admin", "Developer"]
+                    st.session_state.user_role in ["Admin", "Developer", "Admin-Lite"]
                     or candidate.get("created_by_user_id") == st.session_state.user_id
                 )
 
                 if is_cand_locked:
-                    if st.session_state.user_role in ["Admin", "Developer"]:
+                    if st.session_state.user_role in ["Admin", "Developer", "Admin-Lite"]:
                         if cols[10].button("🔓", key=f"unlock_{candidate['candidate_id']}", help=f"Locked: {cand_lock_reason}. Click to Admin Unlock with Remark."):
                             admin_unlock_candidate_dialog(candidate["candidate_id"], full_name, cand_lock_reason, raw_cand_data=candidate)
                     else:
@@ -2202,7 +2202,7 @@ with right_col:
                                     st.caption("No CV on file")
                             else:
                                 if is_cand_locked_sem:
-                                    if st.session_state.user_role in ["Admin", "Developer"]:
+                                    if st.session_state.user_role in ["Admin", "Developer", "Admin-Lite"]:
                                         if st.button(f"🔓 Unlock", key=f"sem_unlock_{cand['candidate_id']}", use_container_width=True, help=f"Locked: {sem_lock_reason}. Click to Admin Unlock with Remark"):
                                             admin_unlock_candidate_dialog(cand["candidate_id"], c_name, sem_lock_reason, raw_cand_data=cand)
                                     else:

@@ -393,7 +393,7 @@ if st.session_state.edit_offer_id:
     if offer:
         # SECURITY CHECK: Only Admin, Developer, or the Creator can edit
         if (
-            st.session_state.user_role in ["Admin", "Developer"]
+            st.session_state.user_role in ["Admin", "Developer", "Admin-Lite"]
             or offer.get("created_by_user_id") == st.session_state.user_id
         ):
             editing = True
@@ -460,7 +460,7 @@ with left_col:
     raw_candidates = get_candidates_for_offer()
     
     # Add security filtering for the dropdown (Admin, Developer, Candidate Creator, or Recruiter assigned to the job)
-    if st.session_state.user_role not in ["Admin", "Developer"]:
+    if st.session_state.user_role not in ["Admin", "Developer", "Admin-Lite"]:
         assigned_job_ids = set()
         try:
             assigned = (
@@ -946,7 +946,7 @@ with right_col:
 
     offers = fetch_all_from_table("offer_management", select_fields="*", order_by="offer_id", desc=True)
 
-    is_admin = st.session_state.user_role in ["Admin", "Developer"]
+    is_admin = st.session_state.user_role in ["Admin", "Developer", "Admin-Lite"]
 
     # Security check: Recruiters only see their own offer records
     if not is_admin:
@@ -1000,7 +1000,7 @@ with right_col:
             active_recruiters = [
                 u["full_name"]
                 for u in all_users
-                if u.get("role") == "Recruiter" and u.get("status") == "Active"
+                if u.get("role") in ["Recruiter", "Admin-Lite"] and u.get("status") == "Active"
             ]
             offer_recruiters = {
                 item["created_by_name"]

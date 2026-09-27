@@ -175,44 +175,56 @@ INSERT INTO public.users (
 
 -- ====================================================================
 -- STORAGE BUCKETS & POLICIES (Run to enable file uploads)
+-- Restricts storage access to service_role; blocks direct public access.
 -- ====================================================================
 INSERT INTO storage.buckets (id, name, public) 
-VALUES ('Resume', 'Resume', true)
-ON CONFLICT (id) DO UPDATE SET public = true;
+VALUES ('Resume', 'Resume', false)
+ON CONFLICT (id) DO UPDATE SET public = false;
 
 INSERT INTO storage.buckets (id, name, public) 
-VALUES ('job_documents', 'job_documents', true)
-ON CONFLICT (id) DO UPDATE SET public = true;
+VALUES ('job_documents', 'job_documents', false)
+ON CONFLICT (id) DO UPDATE SET public = false;
 
--- Enable public access policies for storage
+-- Drop legacy permissive public storage policies
+DROP POLICY IF EXISTS "Allow public insert Resume" ON storage.objects;
+DROP POLICY IF EXISTS "Allow public select Resume" ON storage.objects;
+DROP POLICY IF EXISTS "Allow public update Resume" ON storage.objects;
+DROP POLICY IF EXISTS "Allow public delete Resume" ON storage.objects;
+
+DROP POLICY IF EXISTS "Allow public insert job_documents" ON storage.objects;
+DROP POLICY IF EXISTS "Allow public select job_documents" ON storage.objects;
+DROP POLICY IF EXISTS "Allow public update job_documents" ON storage.objects;
+DROP POLICY IF EXISTS "Allow public delete job_documents" ON storage.objects;
+
+-- Restrict storage access strictly to service_role
 DO $$
 BEGIN
     -- Resume policies
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow public insert Resume') THEN
-        CREATE POLICY "Allow public insert Resume" ON storage.objects FOR INSERT TO public WITH CHECK (bucket_id = 'Resume');
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow service_role insert Resume') THEN
+        CREATE POLICY "Allow service_role insert Resume" ON storage.objects FOR INSERT TO service_role WITH CHECK (bucket_id = 'Resume');
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow public select Resume') THEN
-        CREATE POLICY "Allow public select Resume" ON storage.objects FOR SELECT TO public USING (bucket_id = 'Resume');
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow service_role select Resume') THEN
+        CREATE POLICY "Allow service_role select Resume" ON storage.objects FOR SELECT TO service_role USING (bucket_id = 'Resume');
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow public update Resume') THEN
-        CREATE POLICY "Allow public update Resume" ON storage.objects FOR UPDATE TO public USING (bucket_id = 'Resume');
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow service_role update Resume') THEN
+        CREATE POLICY "Allow service_role update Resume" ON storage.objects FOR UPDATE TO service_role USING (bucket_id = 'Resume');
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow public delete Resume') THEN
-        CREATE POLICY "Allow public delete Resume" ON storage.objects FOR DELETE TO public USING (bucket_id = 'Resume');
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow service_role delete Resume') THEN
+        CREATE POLICY "Allow service_role delete Resume" ON storage.objects FOR DELETE TO service_role USING (bucket_id = 'Resume');
     END IF;
 
     -- Job documents policies
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow public insert job_documents') THEN
-        CREATE POLICY "Allow public insert job_documents" ON storage.objects FOR INSERT TO public WITH CHECK (bucket_id = 'job_documents');
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow service_role insert job_documents') THEN
+        CREATE POLICY "Allow service_role insert job_documents" ON storage.objects FOR INSERT TO service_role WITH CHECK (bucket_id = 'job_documents');
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow public select job_documents') THEN
-        CREATE POLICY "Allow public select job_documents" ON storage.objects FOR SELECT TO public USING (bucket_id = 'job_documents');
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow service_role select job_documents') THEN
+        CREATE POLICY "Allow service_role select job_documents" ON storage.objects FOR SELECT TO service_role USING (bucket_id = 'job_documents');
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow public update job_documents') THEN
-        CREATE POLICY "Allow public update job_documents" ON storage.objects FOR UPDATE TO public USING (bucket_id = 'job_documents');
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow service_role update job_documents') THEN
+        CREATE POLICY "Allow service_role update job_documents" ON storage.objects FOR UPDATE TO service_role USING (bucket_id = 'job_documents');
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow public delete job_documents') THEN
-        CREATE POLICY "Allow public delete job_documents" ON storage.objects FOR DELETE TO public USING (bucket_id = 'job_documents');
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow service_role delete job_documents') THEN
+        CREATE POLICY "Allow service_role delete job_documents" ON storage.objects FOR DELETE TO service_role USING (bucket_id = 'job_documents');
     END IF;
 END $$;
 
@@ -256,21 +268,8 @@ CREATE INDEX IF NOT EXISTS idx_legacy_cand_email ON public.legacy_candidates(ema
 CREATE INDEX IF NOT EXISTS idx_legacy_cand_mobile ON public.legacy_candidates(mobile_no);
 CREATE INDEX IF NOT EXISTS idx_legacy_cand_loc ON public.legacy_candidates(current_location);
 
--- Enable RLS and public access
+-- Enable RLS
 ALTER TABLE public.legacy_candidates ENABLE ROW LEVEL SECURITY;
-
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow public select legacy_candidates') THEN
-        CREATE POLICY "Allow public select legacy_candidates" ON public.legacy_candidates FOR SELECT TO public USING (true);
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow public insert legacy_candidates') THEN
-        CREATE POLICY "Allow public insert legacy_candidates" ON public.legacy_candidates FOR INSERT TO public WITH CHECK (true);
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow public update legacy_candidates') THEN
-        CREATE POLICY "Allow public update legacy_candidates" ON public.legacy_candidates FOR UPDATE TO public USING (true);
-    END IF;
-END $$;
 
 -- ====================================================================
 -- 9. TALENT MAPPING TABLE (Company-wise Hierarchy & Market Intelligence)
@@ -301,24 +300,8 @@ CREATE INDEX IF NOT EXISTS idx_talent_company ON public.talent_mapping(company_n
 CREATE INDEX IF NOT EXISTS idx_talent_company_type ON public.talent_mapping(company_type);
 CREATE INDEX IF NOT EXISTS idx_talent_reports_to ON public.talent_mapping(reports_to_id);
 
--- Enable RLS and public policies
+-- Enable RLS
 ALTER TABLE public.talent_mapping ENABLE ROW LEVEL SECURITY;
-
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow public select talent_mapping') THEN
-        CREATE POLICY "Allow public select talent_mapping" ON public.talent_mapping FOR SELECT TO public USING (true);
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow public insert talent_mapping') THEN
-        CREATE POLICY "Allow public insert talent_mapping" ON public.talent_mapping FOR INSERT TO public WITH CHECK (true);
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow public update talent_mapping') THEN
-        CREATE POLICY "Allow public update talent_mapping" ON public.talent_mapping FOR UPDATE TO public USING (true);
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow public delete talent_mapping') THEN
-        CREATE POLICY "Allow public delete talent_mapping" ON public.talent_mapping FOR DELETE TO public USING (true);
-    END IF;
-END $$;
 
 -- ====================================================================
 -- 10. MIGRATION: DYNAMIC CANDIDATE AGE (approx_dob)
@@ -405,6 +388,7 @@ ALTER TABLE public.job_title_master ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.legacy_candidates ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.talent_mapping ENABLE ROW LEVEL SECURITY;
 
+-- Drop any legacy permissive policies on existing deployments
 DROP POLICY IF EXISTS "Allow public select legacy_candidates" ON public.legacy_candidates;
 DROP POLICY IF EXISTS "Allow public insert legacy_candidates" ON public.legacy_candidates;
 DROP POLICY IF EXISTS "Allow public update legacy_candidates" ON public.legacy_candidates;
@@ -412,5 +396,16 @@ DROP POLICY IF EXISTS "Allow public select talent_mapping" ON public.talent_mapp
 DROP POLICY IF EXISTS "Allow public insert talent_mapping" ON public.talent_mapping;
 DROP POLICY IF EXISTS "Allow public update talent_mapping" ON public.talent_mapping;
 DROP POLICY IF EXISTS "Allow public delete talent_mapping" ON public.talent_mapping;
+
+-- ====================================================================
+-- 14. LOGIN ATTEMPTS (Server-side Account-Scoped Brute-Force Lockout)
+-- Tracks consecutive failed login attempts server-side to prevent brute-force attacks.
+-- ====================================================================
+CREATE TABLE IF NOT EXISTS public.login_attempts (
+    email TEXT PRIMARY KEY,
+    failed_count INTEGER DEFAULT 0,
+    locked_until TIMESTAMP WITH TIME ZONE
+);
+ALTER TABLE public.login_attempts ENABLE ROW LEVEL SECURITY;
 
 

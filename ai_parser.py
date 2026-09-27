@@ -463,7 +463,7 @@ Important Rules:
     errors = []
     start_time = time.time()
     MAX_OVERALL_BUDGET = 25.0  # Max total seconds before bailing out to keep UI snappy
-    MAX_TOTAL_ATTEMPTS = 4     # Guaranteed budget: max 2 for Gemini, 1 for Groq, 1 for OpenRouter
+    MAX_TOTAL_ATTEMPTS = 5     # Guaranteed budget: max 2 for Gemini, 2 for Groq, 1 for OpenRouter
     total_attempts = 0
 
     def time_left():

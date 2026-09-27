@@ -362,7 +362,7 @@ if st.session_state.edit_interview_id:
     if interview:
         # SECURITY CHECK: Only Admin, Developer, or the Creator can edit
         if (
-            st.session_state.user_role in ["Admin", "Developer"]
+            st.session_state.user_role in ["Admin", "Developer", "Admin-Lite"]
             or interview.get("created_by_user_id") == st.session_state.user_id
         ):
             editing = True
@@ -435,7 +435,7 @@ with left_col:
     raw_candidates = get_candidates_for_interview()
     
     # Add security filtering for the dropdown (Admin, Developer, Candidate Creator, or Recruiter assigned to the job)
-    if st.session_state.user_role not in ["Admin", "Developer"]:
+    if st.session_state.user_role not in ["Admin", "Developer", "Admin-Lite"]:
         assigned_job_ids = set()
         try:
             assigned = (
@@ -984,7 +984,7 @@ with right_col:
 
     interviews = fetch_all_from_table("interview_management", select_fields="*", order_by="interview_id", desc=True)
 
-    is_admin = st.session_state.user_role in ["Admin", "Developer"]
+    is_admin = st.session_state.user_role in ["Admin", "Developer", "Admin-Lite"]
 
     # Security check: Recruiters only see their own interview records
     if not is_admin:
@@ -1060,7 +1060,7 @@ with right_col:
             active_recruiters = [
                 u["full_name"]
                 for u in all_users
-                if u.get("role") == "Recruiter" and u.get("status") == "Active"
+                if u.get("role") in ["Recruiter", "Admin-Lite"] and u.get("status") == "Active"
             ]
             interview_recruiters = {
                 item["created_by_name"]

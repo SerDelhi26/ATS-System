@@ -76,7 +76,7 @@ if not st.session_state.get("logged_in", False):
     st.stop()
 
 # Determine user access level
-is_admin = str(st.session_state.get("user_role", "")).lower() in ["admin", "developer"]
+is_admin = str(st.session_state.get("user_role", "")).lower() in ["admin", "developer", "admin-lite"]
 
 st.set_page_config(
     page_title="Job Management",
@@ -135,7 +135,7 @@ def get_all_sub_categories():
 
 def get_recruiters():
     all_users = get_master_lookups().get("users", [])
-    return [u for u in all_users if u.get("role") == "Recruiter" and u.get("status", "Active") == "Active"]
+    return [u for u in all_users if u.get("role") in ["Recruiter", "Admin-Lite"] and u.get("status", "Active") == "Active"]
 
 def get_all_candidates_for_matching():
     """Delegates to the centralized, memory-cached unified candidate pool."""

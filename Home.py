@@ -21,6 +21,17 @@ st.set_page_config(
 
 apply_theme()
 
+# Check Session Inactivity Timeout (30 minutes)
+IDLE_TIMEOUT_SECONDS = 30 * 60
+if st.session_state.get("logged_in", False):
+    now = time.time()
+    last_act = st.session_state.get("last_activity", now)
+    if now - last_act > IDLE_TIMEOUT_SECONDS:
+        st.session_state.clear()
+        st.session_state["session_timeout_msg"] = "🔒 Session expired due to 30 minutes of inactivity. Please log in again."
+        st.rerun()
+    st.session_state["last_activity"] = now
+
 # Initialize Session State Variables
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -36,6 +47,86 @@ if "login_failed_attempts" not in st.session_state:
     st.session_state.login_failed_attempts = 0
 if "login_lockout_until" not in st.session_state:
     st.session_state.login_lockout_until = 0.0
+if "last_activity" not in st.session_state:
+    st.session_state.last_activity = time.time()
+
+
+def check_login_lockout(email: str) -> tuple[bool, int]:
+    """Checks account-scoped server-side lockout (login_attempts table) and session-scoped fallback."""
+    clean_email = email.strip().lower()
+    now_ts = time.time()
+    if st.session_state.get("login_lockout_until", 0.0) > now_ts:
+        return True, int(st.session_state.login_lockout_until - now_ts)
+
+    if not clean_email:
+        return False, 0
+
+    try:
+        res = supabase.table("login_attempts").select("failed_count, locked_until").eq("email", clean_email).execute()
+        if res.data:
+            rec = res.data[0]
+            locked_until_str = rec.get("locked_until")
+            if locked_until_str:
+                from datetime import datetime, timezone
+                clean_dt_str = str(locked_until_str).replace("Z", "+00:00")
+                lock_dt = datetime.fromisoformat(clean_dt_str)
+                now_dt = datetime.now(timezone.utc)
+                if lock_dt > now_dt:
+                    rem = int((lock_dt - now_dt).total_seconds())
+                    return True, rem
+    except Exception:
+        pass
+
+    return False, 0
+
+
+def record_login_result(email: str, success: bool) -> tuple[bool, int, int]:
+    """Updates failed_count & locked_until server-side, clearing on success."""
+    clean_email = email.strip().lower()
+    from datetime import datetime, timezone, timedelta
+    now_dt = datetime.now(timezone.utc)
+
+    if success:
+        st.session_state.login_failed_attempts = 0
+        st.session_state.login_lockout_until = 0.0
+        try:
+            supabase.table("login_attempts").delete().eq("email", clean_email).execute()
+        except Exception:
+            pass
+        return False, 0, 0
+
+    # Failure handling
+    st.session_state.login_failed_attempts = st.session_state.get("login_failed_attempts", 0) + 1
+    new_failed = st.session_state.login_failed_attempts
+    locked_until_iso = None
+    is_locked = False
+    rem_sec = 0
+
+    try:
+        res = supabase.table("login_attempts").select("failed_count, locked_until").eq("email", clean_email).execute()
+        server_count = (res.data[0].get("failed_count", 0) if res.data else 0) + 1
+        new_failed = max(server_count, new_failed)
+
+        if new_failed >= 5:
+            lock_until_dt = now_dt + timedelta(seconds=180)
+            locked_until_iso = lock_until_dt.isoformat()
+            is_locked = True
+            rem_sec = 180
+            st.session_state.login_lockout_until = time.time() + 180
+
+        supabase.table("login_attempts").upsert({
+            "email": clean_email,
+            "failed_count": new_failed,
+            "locked_until": locked_until_iso
+        }).execute()
+    except Exception:
+        if new_failed >= 5:
+            st.session_state.login_lockout_until = time.time() + 180
+            is_locked = True
+            rem_sec = 180
+
+    return is_locked, rem_sec, new_failed
+
 
 # ==========================
 # LOGIN & RESET VIEW FUNCTION
@@ -100,12 +191,15 @@ def login_view():
         
         return
 
+    if st.session_state.get("session_timeout_msg"):
+        st.warning(st.session_state.pop("session_timeout_msg"))
+
     render_logo(width=240, align="left")
 
     st.markdown("# 🔐 Welcome to ATS Login")
     st.markdown("Please sign in to continue.")
 
-    # Check for active brute-force lockout
+    # Check for active session-level brute-force lockout
     now = time.time()
     if st.session_state.login_lockout_until > now:
         remaining_sec = int(st.session_state.login_lockout_until - now)
@@ -129,54 +223,52 @@ def login_view():
     do_submit = submit_login or st.session_state.pop("submit_triggered", False)
 
     if do_submit:
-        now = time.time()
-        if st.session_state.login_lockout_until > now:
-            remaining_sec = int(st.session_state.login_lockout_until - now)
-            st.error(f"⏳ Please wait {remaining_sec} seconds before attempting to login again.")
-            st.stop()
-
-        if not email.strip() or not password.strip():
+        clean_email = email.strip().lower()
+        if not clean_email or not password.strip():
             st.error("Please enter both email and password.")
         else:
+            # Check server-side account-scoped lockout
+            is_locked, rem_sec = check_login_lockout(clean_email)
+            if is_locked:
+                st.error(f"⏳ Account temporarily locked due to 5 consecutive failed login attempts. Please wait {rem_sec} seconds before trying again.")
+                st.stop()
+
             try:
                 response = (
                     supabase
                     .table("users")
                     .select("user_id, full_name, role, password_hash, status")
-                    .eq("email", email.strip())
+                    .eq("email", clean_email)
                     .eq("status", "Active")
                     .execute()
                 )
 
                 if not response.data:
-                    st.session_state.login_failed_attempts += 1
-                    if st.session_state.login_failed_attempts >= 5:
-                        st.session_state.login_lockout_until = time.time() + 180  # 3-minute lockout
-                        st.error("🚨 5 consecutive failed attempts. Login temporarily locked for 3 minutes.")
+                    is_locked, rem_sec, failed_cnt = record_login_result(clean_email, success=False)
+                    if is_locked:
+                        st.error("🚨 5 consecutive failed attempts. Account temporarily locked for 3 minutes.")
                     else:
-                        remaining = 5 - st.session_state.login_failed_attempts
-                        st.error(f"Invalid email or account is inactive. ({remaining} attempts remaining)")
+                        remaining = max(1, 5 - failed_cnt)
+                        st.error(f"Invalid email or account is inactive. ({remaining} attempts remaining before 3-minute lockout)")
                 else:
                     user = response.data[0]
                     
                     if bcrypt.checkpw(password.encode(), user["password_hash"].encode()):
-                        # Reset failed attempt counter on success
-                        st.session_state.login_failed_attempts = 0
-                        st.session_state.login_lockout_until = 0.0
+                        record_login_result(clean_email, success=True)
                         st.session_state.logged_in = True
                         st.session_state.user_id = user["user_id"]
                         st.session_state.user_name = user["full_name"]
                         st.session_state.user_role = user["role"]
+                        st.session_state.last_activity = time.time()
                         st.success(f"Welcome back, {user['full_name']}!")
                         st.rerun()
                     else:
-                        st.session_state.login_failed_attempts += 1
-                        if st.session_state.login_failed_attempts >= 5:
-                            st.session_state.login_lockout_until = time.time() + 180  # 3-minute lockout
-                            st.error("🚨 5 consecutive failed attempts. Login temporarily locked for 3 minutes.")
+                        is_locked, rem_sec, failed_cnt = record_login_result(clean_email, success=False)
+                        if is_locked:
+                            st.error("🚨 5 consecutive failed attempts. Account temporarily locked for 3 minutes.")
                         else:
-                            remaining = 5 - st.session_state.login_failed_attempts
-                            st.error(f"Incorrect password. ({remaining} attempts remaining)")
+                            remaining = max(1, 5 - failed_cnt)
+                            st.error(f"Incorrect password. ({remaining} attempts remaining before 3-minute lockout)")
             except Exception as e:
                 st.error(f"Login error: {str(e)}")
 
@@ -198,8 +290,8 @@ else:
         st.Page("views/7_Offer_Management.py", title="Offer Management", icon="📄"),
     ]
 
-    # Admins and Developers get User Management and Report Management (Hidden completely for Recruiters)
-    if st.session_state.user_role in ["Admin", "Developer"]:
+    # Admins, Admin-Lite and Developers get User Management and Report Management (Hidden completely for Recruiters)
+    if st.session_state.user_role in ["Admin", "Developer", "Admin-Lite"]:
         pages_list.insert(1, st.Page("views/3_User_Management.py", title="User Management", icon="👥"))
         pages_list.insert(2, st.Page("views/8_Report_Management.py", title="Report Management", icon="📈"))
 

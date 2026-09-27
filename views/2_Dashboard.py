@@ -64,7 +64,7 @@ st.markdown("# 📊 ATS Analytics Dashboard")
 st.caption(f"Welcome back, **{st.session_state.user_name}** ({st.session_state.user_role})")
 
 # Data Protection: Hide table download buttons & toolbars for non-Admin/Developer users
-if st.session_state.get("user_role") not in ["Admin", "Developer"]:
+if st.session_state.get("user_role") not in ["Admin", "Developer", "Admin-Lite"]:
     st.markdown(
         """
         <style>
@@ -137,7 +137,7 @@ jobs, candidates, interviews, offers, all_users, job_titles, companies, job_assi
 # Lookups
 admin_uids = {u["user_id"] for u in all_users if u.get("role") in ["Admin", "Developer"]}
 admin_names = {u["full_name"].strip().lower() for u in all_users if u.get("role") in ["Admin", "Developer"]} | {"admin", "system admin", "administrator", "developer"}
-recruiters = [u for u in all_users if u.get("role") == "Recruiter"]
+recruiters = [u for u in all_users if u.get("role") in ["Recruiter", "Admin-Lite"]]
 recruiter_uids = {u["user_id"] for u in recruiters}
 recruiter_names_lower = {r["full_name"].strip().lower() for r in recruiters}
 job_title_lookup = {item["job_title_id"]: item["job_title_name"] for item in job_titles}
@@ -976,7 +976,7 @@ if recruiter_filter != "All Recruiters":
     target_rec_uid = recruiter_user_map.get(recruiter_filter)
     target_job_ids = rec_uid_to_job_ids.get(target_rec_uid, set()) | {c.get("job_id") for c in filtered_candidates if c.get("job_id")}
     workplan_jobs = [j for j in filtered_jobs if str(j.get("job_status") or "").strip().lower() == "open" and j.get("job_id") in target_job_ids]
-elif current_user_role in ["Admin", "Developer"]:
+elif current_user_role in ["Admin", "Developer", "Admin-Lite"]:
     workplan_jobs = [j for j in filtered_jobs if str(j.get("job_status") or "").strip().lower() == "open"]
 else:
     assigned_job_ids = [a["job_id"] for a in job_assignments if a.get("user_id") == current_user_id]

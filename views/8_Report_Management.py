@@ -13,8 +13,8 @@ if not st.session_state.get("logged_in", False):
     st.switch_page("Home.py")
     st.stop()
 
-if st.session_state.get("user_role") not in ["Admin", "Developer"]:
-    st.error("⛔ Access Denied: Report Management is restricted to Admin and Developer users.")
+if st.session_state.get("user_role") not in ["Admin", "Developer", "Admin-Lite"]:
+    st.error("⛔ Access Denied: Report Management is restricted to Admin, Admin-Lite and Developer users.")
     st.stop()
 
 # ==========================

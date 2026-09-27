@@ -73,10 +73,10 @@ if not st.session_state.get(
 
 if st.session_state.get(
     "user_role"
-) not in ["Admin", "Developer"]:
+) not in ["Admin", "Developer", "Admin-Lite"]:
 
     st.error(
-        "Access Denied. Admin and Developer Only."
+        "Access Denied. Admin, Admin-Lite and Developer Only."
     )
 
     st.stop()
@@ -281,9 +281,9 @@ with left_col:
         )
 
         if is_developer:
-            role_options = ["Recruiter", "Admin", "Developer"]
+            role_options = ["Recruiter", "Admin-Lite", "Admin", "Developer"]
         else:
-            role_options = ["Recruiter", "Admin"]
+            role_options = ["Recruiter", "Admin-Lite", "Admin"]
 
         if editing and user.get("role") in role_options:
             default_role_idx = role_options.index(user["role"])
@@ -561,7 +561,7 @@ with right_col:
     with col1:
         role_filter = st.selectbox(
             "Role Filter",
-            ["All", "Admin", "Recruiter", "Developer"]
+            ["All", "Admin", "Admin-Lite", "Recruiter", "Developer"]
         )
     with col2:
         status_filter = st.selectbox(
