@@ -1,9 +1,13 @@
 import os
 import re
 import base64
+import logging
 from concurrent.futures import ThreadPoolExecutor
 import streamlit as st
 from db import supabase
+
+logger = logging.getLogger("ats.notifications")
+
 
 @st.cache_resource
 def get_cached_logo_b64() -> str:
@@ -68,11 +72,34 @@ def show_logout():
         st.cache_data.clear()
         st.rerun()
 
+@st.cache_data(ttl=120)
+def get_master_lookups():
+    """Fetches and caches master table lookups concurrently using ThreadPoolExecutor."""
+    try:
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            fut_comp = executor.submit(lambda: supabase.table("company_master").select("*").order("company_name").execute().data or [])
+            fut_jt = executor.submit(lambda: supabase.table("job_title_master").select("*").order("job_title_name").execute().data or [])
+            fut_cat = executor.submit(lambda: supabase.table("category_master").select("*").order("category_name").execute().data or [])
+            fut_scat = executor.submit(lambda: supabase.table("sub_category_master").select("*").order("sub_category_name").execute().data or [])
+            fut_users = executor.submit(lambda: supabase.table("users").select("user_id, full_name, email, role, status").execute().data or [])
+            
+        return {
+            "companies": fut_comp.result(),
+            "job_titles": fut_jt.result(),
+            "categories": fut_cat.result(),
+            "sub_categories": fut_scat.result(),
+            "users": fut_users.result()
+        }
+    except Exception as e:
+        logger.warning(f"Error fetching master lookups: {e}")
+        return {"companies": [], "job_titles": [], "categories": [], "sub_categories": [], "users": []}
+
+
 @st.cache_data(ttl=60)
 def get_recruiter_notification_data(user_id):
     """Cached helper to fetch assigned open jobs, candidate submissions, and lookups for notifications."""
     assignments = supabase.table("job_assignment").select("job_id").eq("user_id", user_id).execute().data or []
-    assigned_job_ids = [a["job_id"] for a in assignments]
+    assigned_job_ids = list({a["job_id"] for a in assignments if a.get("job_id")})
     if not assigned_job_ids:
         return [], set(), {}, {}
     
@@ -93,14 +120,14 @@ def get_recruiter_notification_data(user_id):
         .execute()
         .data or []
     )
-    jobs_with_candidates = {c["job_id"] for c in candidates_added}
+    jobs_with_candidates = {c["job_id"] for c in candidates_added if c.get("job_id")}
     
-    job_titles = supabase.table("job_title_master").select("job_title_id, job_title_name").execute().data or []
-    companies = supabase.table("company_master").select("company_id, company_name").execute().data or []
-    title_lookup = {t["job_title_id"]: t["job_title_name"] for t in job_titles}
-    company_lookup = {c["company_id"]: c["company_name"] for c in companies}
+    lookups = get_master_lookups()
+    title_lookup = {t["job_title_id"]: t["job_title_name"] for t in lookups.get("job_titles", [])}
+    company_lookup = {c["company_id"]: c["company_name"] for c in lookups.get("companies", [])}
     
     return jobs, jobs_with_candidates, title_lookup, company_lookup
+
 
 @st.fragment
 def show_job_notifications():
@@ -118,53 +145,55 @@ def show_job_notifications():
         jobs, jobs_with_candidates, title_lookup, company_lookup = get_recruiter_notification_data(user_id)
         
         if not jobs:
-            with st.sidebar:
-                st.markdown("---")
-                st.markdown("🔔 **Notifications:** No jobs assigned.")
+            st.markdown("---")
+            st.markdown("🔔 **Notifications:** No jobs assigned.")
             return
 
         if "seen_job_ids" not in st.session_state:
             st.session_state.seen_job_ids = []
-            
+
         # Filter out jobs that are already "seen" temporarily OR have candidates added by this user
         unseen_jobs = [
             j for j in jobs 
             if j["job_id"] not in st.session_state.seen_job_ids
             and j["job_id"] not in jobs_with_candidates
         ]
-        
+
         count = len(unseen_jobs)
-        
-        with st.sidebar:
-            st.markdown("---")
-            if count > 0:
-                with st.expander(f"🔔 New Jobs ({count})", expanded=True):
-                    st.markdown(f"**You have {count} newly assigned job(s):**")
 
-                    for j in unseen_jobs:
-                        col1, col2 = st.columns([0.6, 0.4])
-                        col1.markdown(f"<div style='margin-top: 8px;'>📌 <b>{j['job_reference_no']}</b></div>", unsafe_allow_html=True)
-                        
-                        with col2:
-                            with st.popover("👁️ View", use_container_width=True):
-                                st.markdown(f"**Job No:** {j['job_reference_no']}")
-                                st.markdown(f"**Title:** {title_lookup.get(j.get('job_title_id'), 'N/A')}")
-                                st.markdown(f"**Company:** {company_lookup.get(j.get('company_id'), 'N/A')}")
-                                st.markdown(f"**Location:** {j.get('location', 'N/A')}")
-                                st.markdown(f"**Experience:** {j.get('experience_min_year', 0)} - {j.get('experience_max_year', 0)} Yrs")
-                                st.markdown(f"**Budget:** {j.get('pay_min', 0)} - {j.get('pay_max', 0)} {j.get('currency', '')}")
-                                st.markdown(f"**Skills:** {j.get('skills_required', 'N/A')}")
-                                st.info(j.get('job_description', 'No description provided.'))
-                    
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    if st.button("Mark All as Read", use_container_width=True):
-                        st.session_state.seen_job_ids.extend([j["job_id"] for j in unseen_jobs])
+        st.markdown("---")
+        if count > 0:
+            with st.expander(f"🔔 New Jobs ({count})", expanded=True):
+                st.markdown(f"**You have {count} newly assigned job(s):**")
+
+                for j in unseen_jobs:
+                    col1, col2 = st.columns([0.6, 0.4])
+                    col1.markdown(f"<div style='margin-top: 8px;'>📌 <b>{j['job_reference_no']}</b></div>", unsafe_allow_html=True)
+
+                    with col2:
+                        with st.popover("👁️ View", use_container_width=True, key=f"notif_view_{j['job_id']}"):
+                            st.markdown(f"**Job No:** {j['job_reference_no']}")
+                            st.markdown(f"**Title:** {title_lookup.get(j.get('job_title_id'), 'N/A')}")
+                            st.markdown(f"**Company:** {company_lookup.get(j.get('company_id'), 'N/A')}")
+                            st.markdown(f"**Location:** {j.get('location', 'N/A')}")
+                            st.markdown(f"**Experience:** {j.get('experience_min_year', 0)} - {j.get('experience_max_year', 0)} Yrs")
+                            st.markdown(f"**Budget:** {j.get('pay_min', 0)} - {j.get('pay_max', 0)} {j.get('currency', '')}")
+                            st.markdown(f"**Skills:** {j.get('skills_required', 'N/A')}")
+                            st.info(j.get('job_description', 'No description provided.'))
+
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("Mark All as Read", use_container_width=True, key="btn_notif_mark_all_read"):
+                    st.session_state.seen_job_ids.extend([j["job_id"] for j in unseen_jobs])
+                    try:
+                        st.rerun(scope="fragment")
+                    except TypeError:
                         st.rerun()
-            else:
-                st.markdown("🔔 **Notifications:** All caught up!")
+        else:
+            st.markdown("🔔 **Notifications:** All caught up!")
 
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Error rendering job notifications: {e}")
+
 
 
 def render_pagination(items, page_size_default=25, key_prefix="page", page_size_options=[25, 50, 100]):
@@ -309,8 +338,10 @@ def clear_data_cache(entity: str = None):
             fetch_all_live_candidates.clear()
             fetch_all_legacy_candidates.clear()
             get_unified_candidate_pool.clear()
+            get_recruiter_notification_data.clear()
             fetch_all_from_table.clear()
         else:
+            get_master_lookups.clear()
             fetch_all_from_table.clear()
             fetch_all_live_candidates.clear()
             fetch_all_legacy_candidates.clear()
@@ -319,27 +350,6 @@ def clear_data_cache(entity: str = None):
     except Exception:
         pass
 
-
-@st.cache_data(ttl=120)
-def get_master_lookups():
-    """Fetches and caches master table lookups concurrently using ThreadPoolExecutor."""
-    try:
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            fut_comp = executor.submit(lambda: supabase.table("company_master").select("*").order("company_name").execute().data or [])
-            fut_jt = executor.submit(lambda: supabase.table("job_title_master").select("*").order("job_title_name").execute().data or [])
-            fut_cat = executor.submit(lambda: supabase.table("category_master").select("*").order("category_name").execute().data or [])
-            fut_scat = executor.submit(lambda: supabase.table("sub_category_master").select("*").order("sub_category_name").execute().data or [])
-            fut_users = executor.submit(lambda: supabase.table("users").select("user_id, full_name, email, role, status").execute().data or [])
-            
-        return {
-            "companies": fut_comp.result(),
-            "job_titles": fut_jt.result(),
-            "categories": fut_cat.result(),
-            "sub_categories": fut_scat.result(),
-            "users": fut_users.result()
-        }
-    except Exception:
-        return {"companies": [], "job_titles": [], "categories": [], "sub_categories": [], "users": []}
 
 
 @st.cache_data(ttl=300, show_spinner=False)
