@@ -59,9 +59,13 @@ def show_user_profile():
             st.markdown("---")
 
 def show_logout():
-    """Renders the standard logout button in the sidebar and safely returns to login."""
+    """Renders the standard logout and refresh buttons in the sidebar and safely returns to login."""
     if st.button("🚪 Logout", use_container_width=True):
         st.session_state.clear()
+        st.rerun()
+
+    if st.button("🔄 Refresh Page", use_container_width=True, help="Clear cache and reload the latest data from database"):
+        st.cache_data.clear()
         st.rerun()
 
 @st.cache_data(ttl=60)

@@ -134,11 +134,6 @@ def get_dashboard_data():
 
 jobs, candidates, interviews, offers, all_users, job_titles, companies, job_assignments = get_dashboard_data()
 
-with st.sidebar:
-    if st.button("🔄 Refresh Metrics", use_container_width=True, help="Fetch fresh data from database"):
-        get_dashboard_data.clear()
-        st.rerun()
-
 # Lookups
 admin_uids = {u["user_id"] for u in all_users if u.get("role") in ["Admin", "Developer"]}
 admin_names = {u["full_name"].strip().lower() for u in all_users if u.get("role") in ["Admin", "Developer"]} | {"admin", "system admin", "administrator", "developer"}
