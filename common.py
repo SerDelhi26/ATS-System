@@ -209,7 +209,10 @@ def render_pagination(items, page_size_default=25, key_prefix="page", page_size_
 
     if col_prev.button("◀ Prev", key=f"{key_prefix}_prev_btn", disabled=(current_page <= 1), use_container_width=True):
         st.session_state[page_key] -= 1
-        st.rerun()
+        try:
+            st.rerun(scope="fragment")
+        except TypeError:
+            st.rerun()
 
     col_page.markdown(
         f"<div style='text-align: center; padding-top: 6px; font-weight: 600; font-size: 13px; color: #1E293B;'>"
@@ -220,7 +223,10 @@ def render_pagination(items, page_size_default=25, key_prefix="page", page_size_
 
     if col_next.button("Next ▶", key=f"{key_prefix}_next_btn", disabled=(current_page >= total_pages), use_container_width=True):
         st.session_state[page_key] += 1
-        st.rerun()
+        try:
+            st.rerun(scope="fragment")
+        except TypeError:
+            st.rerun()
 
     # Slice items (works for list or pandas DataFrame)
     if hasattr(items, "iloc"):
@@ -231,6 +237,7 @@ def render_pagination(items, page_size_default=25, key_prefix="page", page_size_
     return page_items, current_page, total_pages
 
 
+@st.fragment
 def render_paginated_section(
     items,
     render_row_fn,

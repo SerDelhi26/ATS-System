@@ -1,14 +1,11 @@
 import os
 import sys
-import importlib
 import time
 import base64
 import streamlit as st
 import bcrypt
 from db import supabase
 from theme import apply_theme
-import common
-importlib.reload(common)
 from common import render_logo
 
 # ==========================
