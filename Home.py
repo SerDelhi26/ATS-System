@@ -78,21 +78,46 @@ def check_login_lockout(email: str) -> tuple[bool, int]:
 
 
 def record_login_result(email: str, success: bool) -> tuple[bool, int, int]:
-    """Updates failed_count & locked_until server-side, clearing on success."""
+    """
+    Updates failed_count & locked_until server-side atomically via Postgres RPC (record_login_failure).
+    Eliminates race conditions under parallel bot brute-force attacks.
+    Falls back gracefully to client-level upsert if the RPC is not yet created.
+    """
     clean_email = email.strip().lower()
-    from datetime import datetime, timezone, timedelta
-    now_dt = datetime.now(timezone.utc)
+    if not clean_email:
+        return False, 0, 0
 
     if success:
         st.session_state.login_failed_attempts = 0
         st.session_state.login_lockout_until = 0.0
         try:
-            supabase.table("login_attempts").delete().eq("email", clean_email).execute()
+            supabase.rpc("clear_login_attempts", {"target_email": clean_email}).execute()
         except Exception:
-            pass
+            try:
+                supabase.table("login_attempts").delete().eq("email", clean_email).execute()
+            except Exception:
+                pass
         return False, 0, 0
 
-    # Failure handling
+    # 1. Primary: Atomic server-side increment & lockout via Postgres RPC
+    try:
+        rpc_res = supabase.rpc("record_login_failure", {"target_email": clean_email}).execute()
+        if rpc_res.data:
+            row = rpc_res.data[0] if isinstance(rpc_res.data, list) else rpc_res.data
+            server_failed = row.get("failed_count", 1)
+            is_locked = bool(row.get("is_locked", False))
+            rem_sec = int(row.get("remaining_seconds", 0))
+
+            st.session_state.login_failed_attempts = server_failed
+            if is_locked:
+                st.session_state.login_lockout_until = time.time() + rem_sec
+            return is_locked, rem_sec, server_failed
+    except Exception:
+        pass
+
+    # 2. Resilient Fallback: Standard upsert if RPC is not yet deployed
+    from datetime import datetime, timezone, timedelta
+    now_dt = datetime.now(timezone.utc)
     st.session_state.login_failed_attempts = st.session_state.get("login_failed_attempts", 0) + 1
     new_failed = st.session_state.login_failed_attempts
     locked_until_iso = None

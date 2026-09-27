@@ -408,4 +408,71 @@ CREATE TABLE IF NOT EXISTS public.login_attempts (
 );
 ALTER TABLE public.login_attempts ENABLE ROW LEVEL SECURITY;
 
+-- Atomic Login Lockout RPC: Increments failed attempts and enforces lockout atomically
+-- Eliminates read-then-write race conditions under high-speed parallel bot attacks.
+CREATE OR REPLACE FUNCTION public.record_login_failure(
+    target_email TEXT,
+    max_attempts INT DEFAULT 5,
+    lockout_duration_seconds INT DEFAULT 180
+)
+RETURNS TABLE (
+    failed_count INT,
+    is_locked BOOLEAN,
+    remaining_seconds INT
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    now_time TIMESTAMPTZ := clock_timestamp();
+    rec RECORD;
+BEGIN
+    target_email := lower(trim(target_email));
+
+    INSERT INTO public.login_attempts (email, failed_count, locked_until)
+    VALUES (target_email, 1, NULL)
+    ON CONFLICT (email) DO UPDATE
+    SET 
+        failed_count = CASE 
+            WHEN login_attempts.locked_until IS NOT NULL AND login_attempts.locked_until <= now_time THEN 1
+            ELSE login_attempts.failed_count + 1
+        END,
+        locked_until = CASE 
+            WHEN (CASE WHEN login_attempts.locked_until IS NOT NULL AND login_attempts.locked_until <= now_time THEN 1 ELSE login_attempts.failed_count + 1 END) >= max_attempts 
+            THEN now_time + (lockout_duration_seconds || ' seconds')::INTERVAL
+            ELSE login_attempts.locked_until
+        END
+    RETURNING login_attempts.failed_count, login_attempts.locked_until INTO rec;
+
+    IF rec.locked_until IS NOT NULL AND rec.locked_until > now_time THEN
+        RETURN QUERY SELECT 
+            rec.failed_count, 
+            TRUE, 
+            EXTRACT(EPOCH FROM (rec.locked_until - now_time))::INT;
+    ELSE
+        RETURN QUERY SELECT 
+            rec.failed_count, 
+            FALSE, 
+            0;
+    END IF;
+END;
+$$;
+
+-- Atomic Login Clear RPC: Clears login attempts upon successful authentication
+CREATE OR REPLACE FUNCTION public.clear_login_attempts(target_email TEXT)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    DELETE FROM public.login_attempts WHERE email = lower(trim(target_email));
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.record_login_failure(TEXT, INT, INT) TO anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.clear_login_attempts(TEXT) TO anon, authenticated, service_role;
+
+
 
