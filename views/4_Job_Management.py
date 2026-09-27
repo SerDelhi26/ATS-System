@@ -927,10 +927,17 @@ with right_col:
 
     # Recruiter & Admin KPI Banner
     if not is_admin:
-        my_assignments = supabase.table("job_assignment").select("job_id").eq("user_id", st.session_state.user_id).execute().data
-        my_job_ids = [a["job_id"] for a in my_assignments]
-        assigned_open_count = len(my_job_ids)
-        my_assigned_candidates = [c for c in all_candidates_db if c.get("job_id") in my_job_ids]
+        my_open_jobs = get_cached_open_jobs(is_admin=False, user_id=st.session_state.user_id)
+        open_job_ids = {j["job_id"] for j in my_open_jobs}
+        assigned_open_count = len(open_job_ids)
+        
+        terminal_statuses = {"rejected", "hired", "joined", "offer rejected", "declined", "cancelled", "blacklisted", "inactive", "inactive / left market", "retired", "deceased"}
+        my_assigned_candidates = [
+            c for c in all_candidates_db 
+            if c.get("job_id") in open_job_ids 
+            and str(c.get("candidate_status") or "").strip().lower() not in terminal_statuses
+            and str(c.get("current_stage") or "").strip().lower() not in terminal_statuses
+        ]
         
         kpi_col1, kpi_col2, kpi_col3 = st.columns(3)
         kpi_col1.metric("📌 Assigned Open Jobs", f"{assigned_open_count}")

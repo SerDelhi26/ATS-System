@@ -230,33 +230,50 @@ def clean_zero(val):
 # ==========================
 st.markdown("### 🔍 Dashboard Filters")
 
-# Read current selections from session state for dynamic options
-cur_rec_filter = st.session_state.get("dash_recruiter_select", "All Recruiters")
-cur_job_filter = st.session_state.get("dash_job_select", "All Jobs")
+is_recruiter = (st.session_state.get("user_role") == "Recruiter")
+current_user_name = st.session_state.get("user_name")
+current_user_id = st.session_state.get("user_id")
 
-# Dynamic options for Recruiters based on selected Job
-if cur_job_filter != "All Jobs" and cur_job_filter in all_label_to_job_id:
-    target_job_id = all_label_to_job_id[cur_job_filter]
-    allowed_rec_uids = job_id_to_rec_uids.get(target_job_id, set())
-    recruiter_options = ["All Recruiters"] + sorted([recruiter_id_to_name[uid] for uid in allowed_rec_uids if uid in recruiter_id_to_name])
-else:
-    recruiter_options = ["All Recruiters"] + sorted([r["full_name"] for r in recruiters])
+if is_recruiter:
+    recruiter_options = [current_user_name]
+    cur_rec_filter = current_user_name
+    st.session_state["dash_recruiter_select"] = current_user_name
 
-if cur_rec_filter not in recruiter_options:
-    cur_rec_filter = "All Recruiters"
-    st.session_state["dash_recruiter_select"] = "All Recruiters"
-
-# Dynamic options for Jobs based on selected Recruiter
-if cur_rec_filter != "All Recruiters" and cur_rec_filter in recruiter_user_map:
-    target_rec_uid = recruiter_user_map[cur_rec_filter]
-    allowed_job_ids = rec_uid_to_job_ids.get(target_rec_uid, set())
+    # Recruiter only sees jobs assigned to them
+    allowed_job_ids = rec_uid_to_job_ids.get(current_user_id, set())
     job_options = ["All Jobs"] + [all_job_labels_map[jid] for jid in allowed_job_ids if jid in all_job_labels_map]
+    cur_job_filter = st.session_state.get("dash_job_select", "All Jobs")
+    if cur_job_filter not in job_options:
+        cur_job_filter = "All Jobs"
+        st.session_state["dash_job_select"] = "All Jobs"
 else:
-    job_options = ["All Jobs"] + [all_job_labels_map[j["job_id"]] for j in jobs if j["job_id"] in all_job_labels_map]
+    # Read current selections from session state for dynamic options
+    cur_rec_filter = st.session_state.get("dash_recruiter_select", "All Recruiters")
+    cur_job_filter = st.session_state.get("dash_job_select", "All Jobs")
 
-if cur_job_filter not in job_options:
-    cur_job_filter = "All Jobs"
-    st.session_state["dash_job_select"] = "All Jobs"
+    # Dynamic options for Recruiters based on selected Job
+    if cur_job_filter != "All Jobs" and cur_job_filter in all_label_to_job_id:
+        target_job_id = all_label_to_job_id[cur_job_filter]
+        allowed_rec_uids = job_id_to_rec_uids.get(target_job_id, set())
+        recruiter_options = ["All Recruiters"] + sorted([recruiter_id_to_name[uid] for uid in allowed_rec_uids if uid in recruiter_id_to_name])
+    else:
+        recruiter_options = ["All Recruiters"] + sorted([r["full_name"] for r in recruiters])
+
+    if cur_rec_filter not in recruiter_options:
+        cur_rec_filter = "All Recruiters"
+        st.session_state["dash_recruiter_select"] = "All Recruiters"
+
+    # Dynamic options for Jobs based on selected Recruiter
+    if cur_rec_filter != "All Recruiters" and cur_rec_filter in recruiter_user_map:
+        target_rec_uid = recruiter_user_map[cur_rec_filter]
+        allowed_job_ids = rec_uid_to_job_ids.get(target_rec_uid, set())
+        job_options = ["All Jobs"] + [all_job_labels_map[jid] for jid in allowed_job_ids if jid in all_job_labels_map]
+    else:
+        job_options = ["All Jobs"] + [all_job_labels_map[j["job_id"]] for j in jobs if j["job_id"] in all_job_labels_map]
+
+    if cur_job_filter not in job_options:
+        cur_job_filter = "All Jobs"
+        st.session_state["dash_job_select"] = "All Jobs"
 
 f_col1, f_col2, f_col3, f_col4, f_col5 = st.columns([1.5, 2, 2, 2, 2.5])
 
@@ -267,7 +284,11 @@ with f_col2:
 with f_col3:
     to_date = st.date_input("To Date", value=date.today(), disabled=not use_date_filter)
 with f_col4:
-    recruiter_filter = st.selectbox("👤 Recruiter", recruiter_options, key="dash_recruiter_select")
+    if is_recruiter:
+        recruiter_filter = current_user_name
+        st.selectbox("👤 Recruiter", [current_user_name], disabled=True, key="dash_recruiter_select_rec")
+    else:
+        recruiter_filter = st.selectbox("👤 Recruiter", recruiter_options, key="dash_recruiter_select")
 with f_col5:
     job_filter = st.selectbox("💼 Job", job_options, key="dash_job_select")
 
@@ -484,13 +505,16 @@ with chart_col2:
 # ==========================
 st.divider()
 st.markdown("### 🏆 Recruiter Performance")
-st.caption("Overview of team productivity based on their assigned candidates.")
+st.caption("Overview of your productivity based on your assigned candidates." if is_recruiter else "Overview of team productivity based on their assigned candidates.")
 
 performance_data = []
 for recruiter in recruiters:
     r_name = recruiter["full_name"]
     r_id = recruiter["user_id"]
-    
+
+    # Strictly filter to the logged-in recruiter for Recruiter role
+    if is_recruiter and r_name != current_user_name:
+        continue
     # Respect the global dropdown filter for recruiters
     if recruiter_filter != "All Recruiters" and r_name != recruiter_filter:
         continue
@@ -796,8 +820,14 @@ with radar_tab3:
         c_stage = (c.get("current_stage") or "").strip()
         c_status = (c.get("candidate_status") or "").strip()
         
-        # Only active in-progress candidates
-        is_in_pipeline = c_stage in ["New", "Screening", "Shortlisted", "Interview", "Selected"]
+        # Only active in-progress candidates (strictly exclude New stage / status)
+        c_stage_clean = c_stage.strip().lower()
+        c_status_clean = c_status.strip().lower()
+        is_in_pipeline = (
+            c_stage in ["Screening", "Shortlisted", "Interview", "Selected"]
+            and c_stage_clean != "new"
+            and c_status_clean != "new"
+        )
         is_not_terminal = (
             c_status not in ["Rejected", "Joined", "Hired", "Offer Rejected", "Declined", "Cancelled"]
             and c_stage not in ["Rejected", "Joined", "Hired", "Offer Rejected", "Declined", "Cancelled"]
