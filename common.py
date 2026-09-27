@@ -334,13 +334,15 @@ def clear_data_cache(entity: str = None):
         elif entity == "jobs":
             fetch_all_from_table.clear()
             get_recruiter_notification_data.clear()
-            get_dashboard_data.clear()
+            if "get_dashboard_data" in globals():
+                get_dashboard_data.clear()
         elif entity == "candidates":
             fetch_all_live_candidates.clear()
             fetch_all_legacy_candidates.clear()
             get_unified_candidate_pool.clear()
             get_recruiter_notification_data.clear()
-            get_dashboard_data.clear()
+            if "get_dashboard_data" in globals():
+                get_dashboard_data.clear()
             fetch_all_from_table.clear()
         else:
             get_master_lookups.clear()
@@ -349,7 +351,8 @@ def clear_data_cache(entity: str = None):
             fetch_all_legacy_candidates.clear()
             get_unified_candidate_pool.clear()
             get_recruiter_notification_data.clear()
-            get_dashboard_data.clear()
+            if "get_dashboard_data" in globals():
+                get_dashboard_data.clear()
     except Exception:
         pass
 
