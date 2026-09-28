@@ -1,6 +1,9 @@
 import streamlit as st
 import bcrypt
-from db import supabase_admin
+try:
+    from db import supabase_admin
+except (ImportError, AttributeError):
+    from db import supabase as supabase_admin
 from theme import apply_theme
 from common import show_logout, show_job_notifications, show_user_profile
 

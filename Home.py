@@ -4,7 +4,11 @@ import time
 import base64
 import streamlit as st
 import bcrypt
-from db import supabase, supabase_admin
+from db import supabase
+try:
+    from db import supabase_admin
+except (ImportError, AttributeError):
+    supabase_admin = supabase
 from theme import apply_theme
 from common import render_logo
 

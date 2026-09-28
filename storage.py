@@ -7,7 +7,11 @@ import logging
 import requests
 from dotenv import load_dotenv
 import streamlit as st
-from db import supabase_admin, get_secret
+from db import get_secret
+try:
+    from db import supabase_admin
+except (ImportError, AttributeError):
+    from db import supabase as supabase_admin
 
 logger = logging.getLogger("storage")
 

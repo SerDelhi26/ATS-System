@@ -102,5 +102,6 @@ def _build_client(api_key: str) -> object:
 supabase = _build_client(SUPABASE_KEY)
 
 # Admin alias for privileged/explicit administrative operations
-supabase_admin = supabase if SUPABASE_SERVICE_KEY else _build_client(SUPABASE_KEY)
+supabase_admin = supabase
+
 
