@@ -487,6 +487,18 @@ def get_dashboard_data(user_id: int = None, user_role: str = "Admin"):
     job_titles = lookups.get("job_titles", [])
     companies = lookups.get("companies", [])
 
+    if not all_users:
+        try:
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                fut_users = executor.submit(lambda: supabase.table("users").select("user_id, full_name, email, role, status").execute().data or [])
+                fut_titles = executor.submit(lambda: supabase.table("job_title_master").select("job_title_id, job_title_name").execute().data or [])
+                fut_comps = executor.submit(lambda: supabase.table("company_master").select("company_id, company_name").execute().data or [])
+                all_users = fut_users.result()
+                job_titles = fut_titles.result()
+                companies = fut_comps.result()
+        except Exception:
+            pass
+
     if user_role == "Recruiter" and user_id is not None:
         rec_assignments = (
             supabase.table("job_assignment")

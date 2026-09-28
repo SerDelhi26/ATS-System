@@ -4,7 +4,8 @@ from common import (
     show_job_notifications, 
     show_user_profile, 
     fetch_all_live_candidates, 
-    fetch_all_from_table
+    fetch_all_from_table,
+    get_dashboard_data
 )
 from db import supabase
 from concurrent.futures import ThreadPoolExecutor
@@ -93,152 +94,7 @@ if st.session_state.get("user_role") not in ["Admin", "Developer", "Admin-Lite"]
 
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
-# ==========================
-# DATA FETCHING
-# ==========================
-@st.cache_data(ttl=180, show_spinner=False)
-def get_dashboard_data(user_id: int = None, user_role: str = "Admin"):
-    """
-    Fetches dashboard metrics dataset with intelligent role-based scoping:
-    - If user_role == 'Recruiter': Queries only assigned jobs and associated candidates/interviews/offers via SQL,
-      reducing data egress and load time by 10x+.
-    - If user_role in ['Admin', 'Developer', 'Admin-Lite']: Concurrently fetches company-wide dataset for full visibility.
-    """
-    try:
-        from common import get_master_lookups
-        lookups = get_master_lookups()
-        all_users = lookups.get("users", [])
-        job_titles = lookups.get("job_titles", [])
-        companies = lookups.get("companies", [])
-    except Exception:
-        all_users = []
-        job_titles = []
-        companies = []
 
-    if user_role == "Recruiter" and user_id is not None:
-        rec_assignments = (
-            supabase.table("job_assignment")
-            .select("job_id, user_id")
-            .eq("user_id", user_id)
-            .execute()
-            .data or []
-        )
-        assigned_job_ids = list({ja["job_id"] for ja in rec_assignments if ja.get("job_id")})
-
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            if assigned_job_ids:
-                jids_str = ",".join(map(str, assigned_job_ids))
-                fut_jobs = executor.submit(
-                    lambda: supabase.table("job_management")
-                    .select("job_id, job_reference_no, job_status, openings, company_id, job_title_id, created_date, modified_date, created_by")
-                    .or_(f"job_id.in.({jids_str}),created_by.eq.{user_id}")
-                    .execute().data or []
-                )
-            else:
-                fut_jobs = executor.submit(
-                    lambda: supabase.table("job_management")
-                    .select("job_id, job_reference_no, job_status, openings, company_id, job_title_id, created_date, modified_date, created_by")
-                    .eq("created_by", user_id)
-                    .execute().data or []
-                )
-
-            cand_fields = "candidate_id, candidate_reference_no, first_name, last_name, job_id, current_stage, candidate_status, created_by_name, created_by_user_id, created_on, updated_on, mobile_no, email, current_company, current_designation, experience_years, experience_months, current_ctc, expected_ctc, notice_period, remarks"
-            if assigned_job_ids:
-                fut_candidates = executor.submit(
-                    lambda: supabase.table("candidate_management")
-                    .select(cand_fields)
-                    .or_(f"created_by_user_id.eq.{user_id},job_id.in.({jids_str})")
-                    .order("candidate_id", desc=True)
-                    .execute().data or []
-                )
-            else:
-                fut_candidates = executor.submit(
-                    lambda: supabase.table("candidate_management")
-                    .select(cand_fields)
-                    .eq("created_by_user_id", user_id)
-                    .order("candidate_id", desc=True)
-                    .execute().data or []
-                )
-
-            if assigned_job_ids:
-                fut_interviews = executor.submit(
-                    lambda: supabase.table("interview_management")
-                    .select("interview_id, candidate_id, job_id, interview_round, interview_date, interview_status, feedback, created_by_name, created_on")
-                    .in_("job_id", assigned_job_ids)
-                    .execute().data or []
-                )
-                fut_offers = executor.submit(
-                    lambda: supabase.table("offer_management")
-                    .select("offer_id, candidate_id, job_id, offer_status, offered_ctc, joining_date, remarks, created_by_name, created_on")
-                    .in_("job_id", assigned_job_ids)
-                    .execute().data or []
-                )
-            else:
-                fut_interviews = executor.submit(lambda: [])
-                fut_offers = executor.submit(lambda: [])
-
-            if not all_users:
-                fut_users = executor.submit(lambda: supabase.table("users").select("user_id, full_name, role").execute().data or [])
-                fut_titles = executor.submit(lambda: supabase.table("job_title_master").select("job_title_id, job_title_name").execute().data or [])
-                fut_comps = executor.submit(lambda: supabase.table("company_master").select("company_id, company_name").execute().data or [])
-                all_users = fut_users.result()
-                job_titles = fut_titles.result()
-                companies = fut_comps.result()
-
-        return (
-            fut_jobs.result(),
-            fut_candidates.result(),
-            fut_interviews.result(),
-            fut_offers.result(),
-            all_users,
-            job_titles,
-            companies,
-            rec_assignments
-        )
-
-    # Org-wide fetch for Admin, Developer, Admin-Lite
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        fut_jobs = executor.submit(
-            fetch_all_from_table,
-            "job_management",
-            select_fields="job_id, job_reference_no, job_status, openings, company_id, job_title_id, created_date, modified_date, created_by"
-        )
-        fut_candidates = executor.submit(
-            fetch_all_from_table,
-            "candidate_management",
-            select_fields="candidate_id, candidate_reference_no, first_name, last_name, job_id, current_stage, candidate_status, created_by_name, created_by_user_id, created_on, updated_on, mobile_no, email, current_company, current_designation, experience_years, experience_months, current_ctc, expected_ctc, notice_period, remarks",
-            order_by="candidate_id",
-            desc=True
-        )
-        fut_interviews = executor.submit(
-            fetch_all_from_table,
-            "interview_management",
-            select_fields="interview_id, candidate_id, job_id, interview_round, interview_date, interview_status, feedback, created_by_name, created_on"
-        )
-        fut_offers = executor.submit(
-            fetch_all_from_table,
-            "offer_management",
-            select_fields="offer_id, candidate_id, job_id, offer_status, offered_ctc, joining_date, remarks, created_by_name, created_on"
-        )
-        fut_assigns = executor.submit(lambda: supabase.table("job_assignment").select("job_id, user_id").execute().data or [])
-        if not all_users:
-            fut_users = executor.submit(lambda: supabase.table("users").select("user_id, full_name, role").execute().data or [])
-            fut_titles = executor.submit(lambda: supabase.table("job_title_master").select("job_title_id, job_title_name").execute().data or [])
-            fut_comps = executor.submit(lambda: supabase.table("company_master").select("company_id, company_name").execute().data or [])
-            all_users = fut_users.result()
-            job_titles = fut_titles.result()
-            companies = fut_comps.result()
-
-    return (
-        fut_jobs.result(),
-        fut_candidates.result(),
-        fut_interviews.result(),
-        fut_offers.result(),
-        all_users,
-        job_titles,
-        companies,
-        fut_assigns.result()
-    )
 
 
 current_user_id = st.session_state.get("user_id")
