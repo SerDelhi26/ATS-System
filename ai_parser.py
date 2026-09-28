@@ -5,10 +5,13 @@ import json
 import base64
 import time
 import threading
+import logging
 from datetime import datetime, date
 import requests
 from dotenv import load_dotenv
 import streamlit as st
+
+logger = logging.getLogger("ai_parser")
 
 try:
     import pypdf
@@ -149,34 +152,44 @@ def get_ordered_key_pool(keys: list[str], provider: str) -> list[tuple[int, str]
     return active_keys + cooling_keys
 
 
+_AADHAAR_PATTERN = re.compile(r'\b\d{4}[ \-]\d{4}[ \-]\d{4}\b')
+_NOT_CANDIDATE_LINE = re.compile(r'(?i)\b(referee|reference|references|ref|manager|supervisor|reporting|father|mother|spouse|husband|wife|guardian|emergency)\b')
+
 def extract_phone_numbers(text: str) -> list[str]:
     """
-    Extracts all distinct valid 10-digit mobile numbers from text or phone string.
-    Handles international codes (+91, 0091), spaces, dashes, slashes, and combined lists.
+    Extracts distinct valid 10-digit Indian mobile numbers from text or phone string.
+    Masks Aadhaar numbers, ignores referee/family lines, and handles international prefixes (+91).
     """
     if not text:
         return []
     
+    # 1. Mask 12-digit Aadhaar patterns so they never get misclassified as phones
+    clean_text = _AADHAAR_PATTERN.sub(' ', str(text))
+    
     found = []
-    # Split text by common multi-number delimiters
-    chunks = re.split(r'[/,;|\\n\r]|(?:\s+or\s+)|\band\b|&', str(text))
-    for c in chunks:
-        # Strip country code (+91, 91, 0)
-        c_clean = re.sub(r'^\s*(\+?91[\s\-]*)?|^0', '', c.strip())
-        digits = re.sub(r'\D', '', c_clean)
-        if len(digits) >= 10:
-            p = digits[-10:]
-            if p not in found:
-                found.append(p)
+    lines = clean_text.splitlines()
+    for line in lines:
+        # Skip lines clearly belonging to references or family emergency contacts
+        if _NOT_CANDIDATE_LINE.search(line):
+            continue
+            
+        chunks = re.split(r'[\r\n/,;|]+|\s+or\s+|\band\b|&', line)
+        for c in chunks:
+            c_clean = re.sub(r'^\s*(\+?91[\s\-]*)?|^0', '', c.strip())
+            digits = re.sub(r'\D', '', c_clean)
+            if len(digits) >= 10:
+                p = digits[-10:]
+                if re.match(r'^[6-9]\d{9}$', p) and p not in found:
+                    found.append(p)
                 
-    # If chunks didn't extract at least 2 numbers, scan globally across text
+    # If line scan didn't find enough, do a global scan on clean text
     if len(found) < 2:
-        raw_matches = re.findall(r'(?:(?:\+?91[\s\-]*)?|(?:\b0))?([6-9]\d{4}[\s\-]?\d{5}|[6-9]\d{2}[\s\-]?\d{3}[\s\-]?\d{4}|[6-9]\d{9})\b', str(text))
+        raw_matches = re.findall(r'(?:(?:\+?91[\s\-]*)?|(?:\b0))?([6-9]\d{4}[\s\-]?\d{5}|[6-9]\d{2}[\s\-]?\d{3}[\s\-]?\d{4}|[6-9]\d{9})\b', clean_text)
         for m in raw_matches:
             digits = re.sub(r'\D', '', m)
             if len(digits) >= 10:
                 p = digits[-10:]
-                if p not in found:
+                if re.match(r'^[6-9]\d{9}$', p) and p not in found:
                     found.append(p)
     return found
 
@@ -191,7 +204,7 @@ def extract_emails(text: str) -> list[str]:
     """Extracts valid email addresses from text."""
     if not text:
         return []
-    pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,7}\b'
+    pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,24}\b'
     matches = re.findall(pattern, str(text))
     valid = []
     for m in matches:
@@ -428,8 +441,11 @@ def sanitize_parsed_output(parsed: dict, raw_text: str = "") -> dict:
 
 def _call_gemini_api(api_key: str, model: str, payload: dict, timeout: int = 15, resume_text: str = "") -> tuple[bool, dict, str]:
     """Makes a single call to the Google Gemini generateContent API with tight timeout."""
-    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-    headers = {"Content-Type": "application/json"}
+    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key
+    }
     try:
         response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
         if response.status_code == 429:
@@ -439,7 +455,7 @@ def _call_gemini_api(api_key: str, model: str, payload: dict, timeout: int = 15,
             mark_key_rate_limited(api_key, cooldown_seconds=30.0)
             return False, {}, "SERVICE_UNAVAILABLE_503"
         if response.status_code != 200:
-            return False, {}, f"Gemini Error ({response.status_code}): {response.text[:200]}"
+            return False, {}, f"Gemini Error ({response.status_code})"
 
         res_json = response.json()
         candidates = res_json.get("candidates", [])
@@ -459,7 +475,8 @@ def _call_gemini_api(api_key: str, model: str, payload: dict, timeout: int = 15,
     except requests.exceptions.Timeout:
         return False, {}, "TIMEOUT"
     except Exception as e:
-        return False, {}, str(e)
+        logger.warning(f"Gemini API request failed: {type(e).__name__}")
+        return False, {}, "NETWORK_ERROR"
 
 
 def _call_groq_api(api_key: str, model: str, system_prompt: str, resume_text: str, timeout: int = 15) -> tuple[bool, dict, str]:
@@ -487,7 +504,7 @@ def _call_groq_api(api_key: str, model: str, system_prompt: str, resume_text: st
             mark_key_rate_limited(api_key, cooldown_seconds=30.0)
             return False, {}, "SERVICE_UNAVAILABLE_503"
         if response.status_code != 200:
-            return False, {}, f"Groq Error ({response.status_code}): {response.text[:200]}"
+            return False, {}, f"Groq Error ({response.status_code})"
 
         res_json = response.json()
         content = res_json["choices"][0]["message"]["content"].strip()
@@ -503,7 +520,8 @@ def _call_groq_api(api_key: str, model: str, system_prompt: str, resume_text: st
     except requests.exceptions.Timeout:
         return False, {}, "TIMEOUT"
     except Exception as e:
-        return False, {}, str(e)
+        logger.warning(f"Groq API request failed: {type(e).__name__}")
+        return False, {}, "NETWORK_ERROR"
 
 
 def _call_openrouter_api(api_key: str, model: str, system_prompt: str, resume_text: str, timeout: int = 15) -> tuple[bool, dict, str]:
@@ -530,7 +548,7 @@ def _call_openrouter_api(api_key: str, model: str, system_prompt: str, resume_te
             mark_key_rate_limited(api_key, cooldown_seconds=60.0)
             return False, {}, "RATE_LIMIT_429"
         if response.status_code != 200:
-            return False, {}, f"OpenRouter Error ({response.status_code}): {response.text[:200]}"
+            return False, {}, f"OpenRouter Error ({response.status_code})"
 
         res_json = response.json()
         content = res_json["choices"][0]["message"]["content"].strip()
@@ -546,7 +564,8 @@ def _call_openrouter_api(api_key: str, model: str, system_prompt: str, resume_te
     except requests.exceptions.Timeout:
         return False, {}, "TIMEOUT"
     except Exception as e:
-        return False, {}, str(e)
+        logger.warning(f"OpenRouter API request failed: {type(e).__name__}")
+        return False, {}, "NETWORK_ERROR"
 
 
 def parse_resume_with_ai(file_bytes: bytes, filename: str, mime_type: str = None) -> tuple[bool, dict, str]:
