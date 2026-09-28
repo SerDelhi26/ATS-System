@@ -4,6 +4,7 @@ import io
 import json
 import base64
 import time
+import threading
 from datetime import datetime, date
 import requests
 from dotenv import load_dotenv
@@ -102,6 +103,50 @@ def get_openrouter_keys() -> list[str]:
         if k_clean and k_clean not in keys:
             keys.append(k_clean)
     return keys
+
+
+# -------------------------------------------------------------
+# Round-Robin Key Load Balancer & Cooldown Tracker
+# -------------------------------------------------------------
+_gemini_key_counter = 0
+_groq_key_counter = 0
+_openrouter_key_counter = 0
+_counter_lock = threading.Lock()
+_key_cooldowns: dict[str, float] = {}
+
+def mark_key_rate_limited(api_key: str, cooldown_seconds: float = 60.0):
+    """Marks an API key as rate-limited until now + cooldown_seconds."""
+    with _counter_lock:
+        _key_cooldowns[api_key] = time.time() + cooldown_seconds
+
+def get_ordered_key_pool(keys: list[str], provider: str) -> list[tuple[int, str]]:
+    """
+    Returns a circular round-robin list of (1_based_index, key) for the provider.
+    Distributes requests evenly across all available accounts, prioritizing keys
+    that are not currently in a rate-limit cooldown.
+    """
+    global _gemini_key_counter, _groq_key_counter, _openrouter_key_counter
+    if not keys:
+        return []
+    
+    n = len(keys)
+    with _counter_lock:
+        if provider == "gemini":
+            start_idx = _gemini_key_counter % n
+            _gemini_key_counter += 1
+        elif provider == "groq":
+            start_idx = _groq_key_counter % n
+            _groq_key_counter += 1
+        else:
+            start_idx = _openrouter_key_counter % n
+            _openrouter_key_counter += 1
+
+    # Form circular sequence of all configured keys
+    circular = [((start_idx + i) % n + 1, keys[(start_idx + i) % n]) for i in range(n)]
+    now = time.time()
+    active_keys = [item for item in circular if _key_cooldowns.get(item[1], 0) <= now]
+    cooling_keys = [item for item in circular if _key_cooldowns.get(item[1], 0) > now]
+    return active_keys + cooling_keys
 
 
 def clean_phone(phone_str: str) -> str:
@@ -272,7 +317,11 @@ def _call_gemini_api(api_key: str, model: str, payload: dict, timeout: int = 15)
     try:
         response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
         if response.status_code == 429:
+            mark_key_rate_limited(api_key, cooldown_seconds=60.0)
             return False, {}, "RATE_LIMIT_429"
+        if response.status_code == 503:
+            mark_key_rate_limited(api_key, cooldown_seconds=30.0)
+            return False, {}, "SERVICE_UNAVAILABLE_503"
         if response.status_code != 200:
             return False, {}, f"Gemini Error ({response.status_code}): {response.text[:200]}"
 
@@ -316,12 +365,23 @@ def _call_groq_api(api_key: str, model: str, system_prompt: str, resume_text: st
     try:
         response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
         if response.status_code == 429:
+            mark_key_rate_limited(api_key, cooldown_seconds=60.0)
             return False, {}, "RATE_LIMIT_429"
+        if response.status_code == 503:
+            mark_key_rate_limited(api_key, cooldown_seconds=30.0)
+            return False, {}, "SERVICE_UNAVAILABLE_503"
         if response.status_code != 200:
             return False, {}, f"Groq Error ({response.status_code}): {response.text[:200]}"
 
         res_json = response.json()
-        content = res_json["choices"][0]["message"]["content"]
+        content = res_json["choices"][0]["message"]["content"].strip()
+        if content.startswith("```json"):
+            content = content[7:]
+        if content.startswith("```"):
+            content = content[3:]
+        if content.endswith("```"):
+            content = content[:-3]
+
         parsed = json.loads(content.strip())
         return True, sanitize_parsed_output(parsed), "Success"
     except requests.exceptions.Timeout:
@@ -351,12 +411,13 @@ def _call_openrouter_api(api_key: str, model: str, system_prompt: str, resume_te
     try:
         response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
         if response.status_code == 429:
+            mark_key_rate_limited(api_key, cooldown_seconds=60.0)
             return False, {}, "RATE_LIMIT_429"
         if response.status_code != 200:
             return False, {}, f"OpenRouter Error ({response.status_code}): {response.text[:200]}"
 
         res_json = response.json()
-        content = res_json["choices"][0]["message"]["content"]
+        content = res_json["choices"][0]["message"]["content"].strip()
         if content.startswith("```json"):
             content = content[7:]
         if content.startswith("```"):
@@ -462,63 +523,88 @@ Important Rules:
 
     errors = []
     start_time = time.time()
-    MAX_OVERALL_BUDGET = 25.0  # Max total seconds before bailing out to keep UI snappy
-    MAX_TOTAL_ATTEMPTS = 5     # Guaranteed budget: max 2 for Gemini, 2 for Groq, 1 for OpenRouter
+    MAX_OVERALL_BUDGET = 35.0  # Max total seconds before bailing out to keep UI snappy
+    MAX_TOTAL_ATTEMPTS = 15    # Guaranteed budget across all configured keys
     total_attempts = 0
 
     def time_left():
         return max(1.0, MAX_OVERALL_BUDGET - (time.time() - start_time))
 
     # -------------------------------------------------------------
-    # 1. Try Gemini Key Pool & Models (Capped at 2 keys, 1 top model per key)
+    # 1. Try Gemini Key Pool & Models (ALL configured keys in round-robin order)
     # -------------------------------------------------------------
-    env_gemini_model = os.getenv("GEMINI_MODEL", "").strip()
-    gemini_models = ["gemini-flash-latest", "gemini-1.5-flash", "gemini-flash-lite-latest"]
-    if env_gemini_model and env_gemini_model not in gemini_models:
+    env_gemini_model = (os.getenv("GEMINI_MODEL") or "").strip()
+    if not env_gemini_model:
+        try:
+            env_gemini_model = str(st.secrets.get("GEMINI_MODEL", "")).strip()
+        except Exception:
+            pass
+
+    gemini_models = ["gemini-flash-lite-latest", "gemini-3.6-flash", "gemini-flash-latest"]
+    if env_gemini_model:
+        if env_gemini_model in gemini_models:
+            gemini_models.remove(env_gemini_model)
         gemini_models.insert(0, env_gemini_model)
 
-    for idx, key in enumerate(gemini_keys[:2], 1):
+    gemini_key_pool = get_ordered_key_pool(gemini_keys, "gemini")
+
+    for idx, key in gemini_key_pool:
         if time_left() <= 2.0 or total_attempts >= MAX_TOTAL_ATTEMPTS:
             break
-        for model in gemini_models[:1]:
-            rem_timeout = min(12, int(time_left()))
+        # Try primary model first, fallback to next if 503 or 404
+        for model in gemini_models[:2]:
+            rem_timeout = min(10, int(time_left()))
             if rem_timeout < 2 or total_attempts >= MAX_TOTAL_ATTEMPTS:
                 break
             total_attempts += 1
             success, data, msg = _call_gemini_api(key, model, gemini_payload, timeout=rem_timeout)
             if success:
-                return True, data, "Resume parsed successfully via Gemini AI!"
-            if msg == "RATE_LIMIT_429":
+                return True, data, f"Resume parsed successfully via Gemini AI (Key #{idx})!"
+            if msg in ["RATE_LIMIT_429", "SERVICE_UNAVAILABLE_503"]:
                 errors.append(f"Gemini Key #{idx} rate-limited.")
-                break # Switch to next key in pool immediately
+                break  # Failover immediately to next Gemini key in the pool!
+            elif "404" in msg:
+                continue  # Model not found, try fallback model for this key
             else:
-                errors.append(f"Gemini ({model}): {msg}")
+                errors.append(f"Gemini Key #{idx} ({model}): {msg}")
 
     # -------------------------------------------------------------
     # 2. Try Groq Key Pool (if Gemini failed, within budget & attempt cap)
     # -------------------------------------------------------------
     if groq_keys and extracted_text and time_left() > 2.0 and total_attempts < MAX_TOTAL_ATTEMPTS:
-        env_groq_model = os.getenv("GROQ_MODEL", "").strip()
-        groq_models = ["openai/gpt-oss-20b", "groq/compound-mini"]
-        if env_groq_model and env_groq_model not in groq_models:
+        env_groq_model = (os.getenv("GROQ_MODEL") or "").strip()
+        if not env_groq_model:
+            try:
+                env_groq_model = str(st.secrets.get("GROQ_MODEL", "")).strip()
+            except Exception:
+                pass
+
+        groq_models = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"]
+        if env_groq_model:
+            if env_groq_model in groq_models:
+                groq_models.remove(env_groq_model)
             groq_models.insert(0, env_groq_model)
 
-        for idx, key in enumerate(groq_keys[:2], 1):
+        groq_key_pool = get_ordered_key_pool(groq_keys, "groq")
+
+        for idx, key in groq_key_pool:
             if time_left() <= 2.0 or total_attempts >= MAX_TOTAL_ATTEMPTS:
                 break
-            for model in groq_models[:1]:
-                rem_timeout = min(12, int(time_left()))
+            for model in groq_models[:2]:
+                rem_timeout = min(10, int(time_left()))
                 if rem_timeout < 2 or total_attempts >= MAX_TOTAL_ATTEMPTS:
                     break
                 total_attempts += 1
                 success, data, msg = _call_groq_api(key, model, system_prompt, extracted_text, timeout=rem_timeout)
                 if success:
-                    return True, data, "Resume parsed successfully via Groq AI!"
-                if msg == "RATE_LIMIT_429":
+                    return True, data, f"Resume parsed successfully via Groq AI (Key #{idx})!"
+                if msg in ["RATE_LIMIT_429", "SERVICE_UNAVAILABLE_503"]:
                     errors.append(f"Groq Key #{idx} rate-limited.")
-                    break # Switch to next Groq key
+                    break  # Failover to next Groq key
+                elif "404" in msg:
+                    continue
                 else:
-                    errors.append(f"Groq ({model}): {msg}")
+                    errors.append(f"Groq Key #{idx} ({model}): {msg}")
 
     # -------------------------------------------------------------
     # 3. Try OpenRouter Key Pool (if Gemini & Groq failed, within budget)
@@ -526,9 +612,11 @@ Important Rules:
     if openrouter_keys and extracted_text and time_left() > 2.0 and total_attempts < MAX_TOTAL_ATTEMPTS:
         openrouter_models = [
             "liquid/lfm-2.5-2.6b:free",
-            "google/gemma-4-26b-a4b-it:free"
+            "inclusionai/ling-3.0-flash-sante:free"
         ]
-        for idx, key in enumerate(openrouter_keys[:1], 1):
+        openrouter_key_pool = get_ordered_key_pool(openrouter_keys, "openrouter")
+
+        for idx, key in openrouter_key_pool:
             if time_left() <= 2.0 or total_attempts >= MAX_TOTAL_ATTEMPTS:
                 break
             for model in openrouter_models[:1]:
@@ -538,12 +626,12 @@ Important Rules:
                 total_attempts += 1
                 success, data, msg = _call_openrouter_api(key, model, system_prompt, extracted_text, timeout=rem_timeout)
                 if success:
-                    return True, data, "Resume parsed successfully via OpenRouter AI!"
+                    return True, data, f"Resume parsed successfully via OpenRouter AI (Key #{idx})!"
                 if msg == "RATE_LIMIT_429":
                     errors.append(f"OpenRouter Key #{idx} rate-limited.")
                     break
                 else:
-                    errors.append(f"OpenRouter ({model}): {msg}")
+                    errors.append(f"OpenRouter Key #{idx} ({model}): {msg}")
 
-    err_summary = " | ".join(errors[-2:]) if errors else "AI parse timeout or provider unavailable."
+    err_summary = " | ".join(errors[-4:]) if errors else "AI parse timeout or provider unavailable."
     return False, {}, err_summary
