@@ -302,7 +302,7 @@ def map_candidate_to_job(candidate_entry, job_id):
                         "is_migrated_to_active": True,
                         "migrated_candidate_id": new_cand_id
                     }).eq("legacy_candidate_id", leg_id).execute()
-            st.cache_data.clear()
+            clear_data_cache("candidates")
             return True
         else:
             # Active candidate direct mapping
@@ -313,7 +313,7 @@ def map_candidate_to_job(candidate_entry, job_id):
                 "current_stage": "Shortlisted",
                 "updated_on": datetime.now().isoformat()
             }).eq("candidate_id", cand_id).execute()
-            st.cache_data.clear()
+            clear_data_cache("candidates")
             return True
     except Exception as e:
         st.error(f"Error mapping candidate: {e}")
@@ -343,7 +343,7 @@ def deactivate_candidate_dialog(cand_id, full_name, is_legacy=False, legacy_id=N
                     "remarks": (existing_remarks + audit_str).strip()
                 }).eq("candidate_id", cand_id).execute()
             st.toast(f"Candidate {full_name} marked as {d_reason}!", icon="🚫")
-            st.cache_data.clear()
+            clear_data_cache("candidates")
             st.rerun()
     with col2:
         if st.button("Cancel", use_container_width=True, key=f"btn_dlg_cancel_d_{cand_id}"):
@@ -373,7 +373,7 @@ def reactivate_candidate_dialog(cand_id, full_name, is_legacy=False, legacy_id=N
                     "remarks": (existing_remarks + audit_str).strip()
                 }).eq("candidate_id", cand_id).execute()
             st.toast(f"Candidate {full_name} reactivated to {r_stage}!", icon="🟢")
-            st.cache_data.clear()
+            clear_data_cache("candidates")
             st.rerun()
     with col2:
         if st.button("Cancel", use_container_width=True, key=f"btn_dlg_cancel_r_{cand_id}"):
@@ -428,7 +428,7 @@ def master_data_editor_dialog():
                             "job_title_name": clean,
                             "modified_date": datetime.now().isoformat()
                         }).eq("job_title_id", selected_item["job_title_id"]).execute()
-                        st.cache_data.clear()
+                        clear_data_cache("lookups")
                         st.toast(f"Job Title successfully corrected to '{clean}'!", icon="✅")
                         st.rerun()
 
@@ -457,7 +457,7 @@ def master_data_editor_dialog():
                         supabase.table("company_master").update({
                             "company_name": clean
                         }).eq("company_id", selected_co_item["company_id"]).execute()
-                        st.cache_data.clear()
+                        clear_data_cache("lookups")
                         st.toast(f"Company successfully corrected to '{clean}'!", icon="✅")
                         st.rerun()
 

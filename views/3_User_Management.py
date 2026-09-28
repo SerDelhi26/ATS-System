@@ -3,7 +3,14 @@ import pandas as pd
 import re
 from db import supabase
 from datetime import date
-from common import show_logout, show_job_notifications, show_user_profile, render_pagination
+from common import (
+    show_logout,
+    show_job_notifications,
+    show_user_profile,
+    render_pagination,
+    get_master_lookups,
+    clear_data_cache
+)
 
 try:
     from common import render_paginated_section
@@ -53,6 +60,25 @@ except (ImportError, AttributeError):
                     render_row_fn(item)
 import bcrypt
 from theme import apply_theme
+
+@st.cache_data(ttl=10)
+def get_all_users():
+    return (
+        supabase
+        .table("users")
+        .select(
+            """
+            user_id,
+            full_name,
+            email,
+            role,
+            status
+            """
+        )
+        .order("user_id")
+        .execute()
+        .data or []
+    )
 
 # ==========================
 # LOGIN CHECK
@@ -192,7 +218,7 @@ if st.session_state.get("reset_user_id"):
                 )
 
                 st.session_state.reset_user_id = None
-                st.cache_data.clear()
+                get_all_users.clear()
                 st.rerun()
 
         if col2.button(
@@ -514,7 +540,8 @@ with left_col:
 
                         st.session_state.user_success_msg = "User added successfully."
 
-                    st.cache_data.clear()
+                    get_all_users.clear()
+                    get_master_lookups.clear()
                     st.rerun()
 
                 except Exception as e:
@@ -526,24 +553,7 @@ with left_col:
             st.session_state.edit_user_id = None
             st.rerun()
 
-@st.cache_data(ttl=10)
-def get_all_users():
-    return (
-        supabase
-        .table("users")
-        .select(
-            """
-            user_id,
-            full_name,
-            email,
-            role,
-            status
-            """
-        )
-        .order("user_id")
-        .execute()
-        .data or []
-    )
+
 
 # ==============================
 # RIGHT PANEL
@@ -650,7 +660,8 @@ with right_col:
                                 .execute()
                             )
                             st.success(f"{row['full_name']} deactivated successfully.")
-                            st.cache_data.clear()
+                            get_all_users.clear()
+                            get_master_lookups.clear()
                             st.rerun(scope="app")
                     else:
                         if cols[7].button("🔓", key=f"activate_{row['user_id']}", help="Activate User"):
@@ -665,7 +676,8 @@ with right_col:
                                 .execute()
                             )
                             st.success(f"{row['full_name']} activated successfully.")
-                            st.cache_data.clear()
+                            get_all_users.clear()
+                            get_master_lookups.clear()
                             st.rerun(scope="app")
                 else:
                     cols[7].markdown("<div title='Developer accounts cannot be deactivated by Admins' style='margin-top:2px; font-size:16px; cursor:help;'>🔒</div>", unsafe_allow_html=True)

@@ -384,7 +384,7 @@ def map_legacy_candidate_to_job(candidate_entry, job_id):
                     "migrated_candidate_id": new_cand_id,
                     "notice_negotiable": "No"
                 }).eq("legacy_candidate_id", leg_id).execute()
-            st.cache_data.clear()
+            clear_data_cache("candidates")
             return True
     except Exception as e:
         st.error(f"Error mapping legacy candidate: {e}")
@@ -414,7 +414,7 @@ def deactivate_candidate_dialog(cand_id, full_name, is_legacy=False, legacy_id=N
                     "remarks": (existing_remarks + audit_str).strip()
                 }).eq("candidate_id", cand_id).execute()
             st.toast(f"Candidate {full_name} marked as {d_reason}!", icon="🚫")
-            st.cache_data.clear()
+            clear_data_cache("candidates")
             st.rerun()
     with col2:
         if st.button("Cancel", use_container_width=True, key=f"btn_cand_dlg_cancel_d_{cand_id}"):
@@ -444,7 +444,7 @@ def reactivate_candidate_dialog(cand_id, full_name, is_legacy=False, legacy_id=N
                     "remarks": (existing_remarks + audit_str).strip()
                 }).eq("candidate_id", cand_id).execute()
             st.toast(f"Candidate {full_name} reactivated to {r_stage}!", icon="🟢")
-            st.cache_data.clear()
+            clear_data_cache("candidates")
             st.rerun()
     with col2:
         if st.button("Cancel", use_container_width=True, key=f"btn_cand_dlg_cancel_r_{cand_id}"):
@@ -485,7 +485,7 @@ def admin_unlock_candidate_dialog(cand_id, full_name, lock_reason, raw_cand_data
             st.session_state.edit_candidate_id = cand_id
             st.session_state.admin_unlocked_candidate_id = cand_id
             st.session_state.candidate_updated_success_msg = "Candidate unlocked for editing. Reason logged to audit remarks."
-            st.cache_data.clear()
+            clear_data_cache("candidates")
             st.rerun()
 
     with col2:
