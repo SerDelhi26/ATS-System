@@ -639,6 +639,15 @@ with left_col:
                     mime_type=f_type
                 )
                 if success:
+                    # Client-side safeguard: if mobile_no is missing, scan raw text
+                    if not parsed_res.get("mobile_no"):
+                        raw_doc_text = ai_parser.extract_text_from_file(f_bytes, f_name, f_type)
+                        phones = ai_parser.extract_phone_numbers(raw_doc_text)
+                        if phones:
+                            parsed_res["mobile_no"] = phones[0]
+                            if len(phones) > 1 and not parsed_res.get("alternate_mobile"):
+                                parsed_res["alternate_mobile"] = phones[1]
+
                     st.session_state.parsed_candidate_data = parsed_res
                     st.session_state.uploaded_resume_cache = {
                         "name": f_name,

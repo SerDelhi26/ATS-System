@@ -153,7 +153,9 @@ def get_ordered_key_pool(keys: list[str], provider: str) -> list[tuple[int, str]
 
 
 _AADHAAR_PATTERN = re.compile(r'\b\d{4}[ \-]\d{4}[ \-]\d{4}\b')
-_NOT_CANDIDATE_LINE = re.compile(r'(?i)\b(referee|reference|references|ref|manager|supervisor|reporting|father|mother|spouse|husband|wife|guardian|emergency)\b')
+_REF_CONTACT_PATTERN = re.compile(
+    r'(?i)\b(?:father|mother|spouse|husband|wife|guardian|emergency\s*contact|referee|reference\s*\d?|reporting\s*manager)\s*(?:\'s)?\s*(?:name|contact|mobile|phone|no)?\s*[:\-–]'
+)
 
 def extract_phone_numbers(text: str) -> list[str]:
     """
@@ -167,10 +169,25 @@ def extract_phone_numbers(text: str) -> list[str]:
     clean_text = _AADHAAR_PATTERN.sub(' ', str(text))
     
     found = []
+
+    # Priority A: Check for explicitly labeled contact lines first
+    # e.g. Mobile: +91 98450 12345, Ph: 9845012345, Contact: 98450-12345, Mob: 9845012345
+    label_pattern = re.compile(
+        r'(?i)(?:mob(?:ile)?(?:\s*no\.?)?|cell|phone(?:\s*no\.?)?|tel(?:\s*no\.?)?|contact(?:\s*no\.?)?|call|whatsapp)\s*[:\-–.]?\s*(?:\+?91[\s\-]*)?(?:\(?0\)?[\s\-]*)?([0-9\s\-().]{10,20})'
+    )
+    for m in label_pattern.finditer(clean_text):
+        num_str = m.group(1)
+        digits = re.sub(r'\D', '', num_str)
+        if len(digits) >= 10:
+            p = digits[-10:]
+            if re.match(r'^[6-9]\d{9}$', p) and p not in found:
+                found.append(p)
+
+    # Priority B: Line-by-line scanning
     lines = clean_text.splitlines()
     for line in lines:
         # Skip lines clearly belonging to references or family emergency contacts
-        if _NOT_CANDIDATE_LINE.search(line):
+        if _REF_CONTACT_PATTERN.search(line):
             continue
             
         chunks = re.split(r'[\r\n/,;|]+|\s+or\s+|\band\b|&', line)
@@ -182,11 +199,11 @@ def extract_phone_numbers(text: str) -> list[str]:
                 if re.match(r'^[6-9]\d{9}$', p) and p not in found:
                     found.append(p)
                 
-    # If line scan didn't find enough, do a global scan on clean text
+    # Priority C: Global scan for 10-digit mobile patterns across text
     if len(found) < 2:
-        raw_matches = re.findall(r'(?:(?:\+?91[\s\-]*)?|(?:\b0))?([6-9]\d{4}[\s\-]?\d{5}|[6-9]\d{2}[\s\-]?\d{3}[\s\-]?\d{4}|[6-9]\d{9})\b', clean_text)
-        for m in raw_matches:
-            digits = re.sub(r'\D', '', m)
+        raw_matches = re.finditer(r'(?:(?:\+?91[\s\-.]*)?|(?:\b0))?([6-9]\d{1,4}[\s\-.]?\d{2,4}[\s\-.]?\d{3,5})\b', clean_text)
+        for rm in raw_matches:
+            digits = re.sub(r'\D', '', rm.group(1))
             if len(digits) >= 10:
                 p = digits[-10:]
                 if re.match(r'^[6-9]\d{9}$', p) and p not in found:
@@ -264,6 +281,63 @@ def extract_text_from_docx(file_bytes: bytes) -> str:
         return "\n".join(paragraphs).strip()
     except Exception:
         return ""
+
+
+def extract_text_from_doc(file_bytes: bytes) -> str:
+    """Extracts text content from Word binary .doc files (Word 97-2003 OLE format)."""
+    if not file_bytes:
+        return ""
+    # 1. Try python-docx first in case it is actually a docx file saved with .doc extension
+    try:
+        txt = extract_text_from_docx(file_bytes)
+        if len(txt) >= 20:
+            return txt
+    except Exception:
+        pass
+
+    # 2. Extract UTF-16LE text sequences (standard in Word 97-2003 .doc binary format)
+    text_pieces = []
+    seen = set()
+    utf16_runs = re.findall(b'(?:[\x20-\x7e\r\n\t]\x00){3,}', file_bytes)
+    for run in utf16_runs:
+        try:
+            decoded = run.decode('utf-16le', errors='ignore').strip()
+            if len(decoded) >= 3 and not decoded.startswith(('Root Entry', 'WordDocument', 'SummaryInformation', 'DocumentSummaryInformation', 'CompObj')):
+                if decoded not in seen:
+                    seen.add(decoded)
+                    text_pieces.append(decoded)
+        except Exception:
+            pass
+
+    # 3. Extract printable ASCII runs (for 8-bit text in older Word docs)
+    ascii_runs = re.findall(b'[\x20-\x7e\r\n\t]{4,}', file_bytes)
+    for run in ascii_runs:
+        try:
+            decoded = run.decode('latin-1', errors='ignore').strip()
+            if len(decoded) >= 4 and not decoded.startswith(('Root Entry', 'WordDocument', 'SummaryInformation', 'DocumentSummaryInformation', 'CompObj')):
+                if decoded not in seen:
+                    seen.add(decoded)
+                    text_pieces.append(decoded)
+        except Exception:
+            pass
+
+    return '\n'.join(text_pieces).strip()
+
+
+def extract_text_from_file(file_bytes: bytes, filename: str = "", mime_type: str = "") -> str:
+    """Universal text extractor supporting PDF, DOCX, DOC, and TXT files."""
+    ext = os.path.splitext(filename or "")[1].lower()
+    if ext == ".pdf" or (mime_type and "pdf" in str(mime_type).lower()):
+        return extract_text_from_pdf(file_bytes)
+    elif ext == ".docx":
+        return extract_text_from_docx(file_bytes)
+    elif ext == ".doc":
+        return extract_text_from_doc(file_bytes)
+    else:
+        try:
+            return file_bytes.decode("utf-8", errors="ignore").strip()
+        except Exception:
+            return ""
 
 
 def normalize_dob(dob_raw) -> str:
@@ -365,7 +439,12 @@ def sanitize_parsed_output(parsed: dict, raw_text: str = "") -> dict:
     approx_dob = compute_approx_dob(parsed)
 
     # 1. Clean & enrich Email
-    email = str(parsed.get("email", "")).strip().lower()
+    email = str(
+        parsed.get("email") or 
+        parsed.get("email_id") or 
+        parsed.get("email_address") or 
+        ""
+    ).strip().lower()
     email = re.sub(r'^(?:mailto:|email:\s*|e-mail:\s*)', '', email).strip()
     if not email or "@" not in email:
         raw_emails = extract_emails(raw_text)
@@ -373,8 +452,32 @@ def sanitize_parsed_output(parsed: dict, raw_text: str = "") -> dict:
             email = raw_emails[0]
 
     # 2. Clean & enrich Mobile & Alternate Mobile
-    raw_mobile = str(parsed.get("mobile_no", "")).strip()
-    raw_alt = str(parsed.get("alternate_mobile", "")).strip()
+    raw_mobile = str(
+        parsed.get("mobile_no") or 
+        parsed.get("mobile") or 
+        parsed.get("phone") or 
+        parsed.get("phone_no") or 
+        parsed.get("phone_number") or 
+        parsed.get("mobile_number") or 
+        parsed.get("contact") or 
+        parsed.get("contact_no") or 
+        parsed.get("contact_number") or 
+        parsed.get("primary_mobile") or 
+        parsed.get("primary_phone") or 
+        parsed.get("cell") or 
+        ""
+    ).strip()
+    raw_alt = str(
+        parsed.get("alternate_mobile") or 
+        parsed.get("alternate_number") or 
+        parsed.get("alternate_phone") or 
+        parsed.get("alt_mobile") or 
+        parsed.get("alt_phone") or 
+        parsed.get("secondary_mobile") or 
+        parsed.get("secondary_phone") or 
+        parsed.get("alternate_contact") or 
+        ""
+    ).strip()
 
     extracted_from_mobile = extract_phone_numbers(raw_mobile)
     extracted_from_alt = extract_phone_numbers(raw_alt)
@@ -394,11 +497,13 @@ def sanitize_parsed_output(parsed: dict, raw_text: str = "") -> dict:
         elif len(extracted_from_alt) > 1:
             alternate_mobile = extracted_from_alt[1]
 
-    # If alternate_mobile is still empty, scan raw resume text for any secondary number
-    if not alternate_mobile and raw_text:
+    # FALLBACK: If mobile_no or alternate_mobile is still empty, scan raw resume text
+    if (not mobile_no or not alternate_mobile) and raw_text:
         text_phones = extract_phone_numbers(raw_text)
         for tp in text_phones:
-            if tp != mobile_no:
+            if not mobile_no:
+                mobile_no = tp
+            elif not alternate_mobile and tp != mobile_no:
                 alternate_mobile = tp
                 break
 
@@ -516,7 +621,7 @@ def _call_groq_api(api_key: str, model: str, system_prompt: str, resume_text: st
             content = content[:-3]
 
         parsed = json.loads(content.strip())
-        return True, sanitize_parsed_output(parsed), "Success"
+        return True, sanitize_parsed_output(parsed, raw_text=resume_text), "Success"
     except requests.exceptions.Timeout:
         return False, {}, "TIMEOUT"
     except Exception as e:
@@ -560,7 +665,7 @@ def _call_openrouter_api(api_key: str, model: str, system_prompt: str, resume_te
             content = content[:-3]
 
         parsed = json.loads(content.strip())
-        return True, sanitize_parsed_output(parsed), "Success"
+        return True, sanitize_parsed_output(parsed, raw_text=resume_text), "Success"
     except requests.exceptions.Timeout:
         return False, {}, "TIMEOUT"
     except Exception as e:
@@ -624,23 +729,14 @@ Important Rules:
 
     ext = os.path.splitext(filename or "")[1].lower()
 
-    # 1. Fast Local Text Extraction
-    extracted_text = ""
-    if ext == ".pdf" or (mime_type and "pdf" in mime_type.lower()):
-        extracted_text = extract_text_from_pdf(file_bytes)
-    elif ext in [".docx", ".doc"]:
-        extracted_text = extract_text_from_docx(file_bytes)
-    else:
-        try:
-            extracted_text = file_bytes.decode("utf-8", errors="ignore")
-        except Exception:
-            extracted_text = ""
+    # 1. Fast Local Text Extraction (supports PDF, DOCX, DOC, TXT)
+    extracted_text = extract_text_from_file(file_bytes, filename, mime_type)
 
     # Build Gemini Payload
     gemini_parts = [{"text": system_prompt}]
     if len(extracted_text) >= 20:
         gemini_parts.append({"text": f"DOCUMENT FILENAME: {filename}\n\nRESUME CONTENT:\n{extracted_text[:20000]}"})
-    elif ext == ".pdf" or (mime_type and "pdf" in mime_type.lower()):
+    elif ext == ".pdf" or (mime_type and "pdf" in str(mime_type).lower()):
         b64_data = base64.b64encode(file_bytes).decode("utf-8")
         gemini_parts.append({
             "inlineData": {
@@ -649,7 +745,8 @@ Important Rules:
             }
         })
     else:
-        gemini_parts.append({"text": f"DOCUMENT: {filename}\n{file_bytes.decode('latin-1', errors='ignore')[:15000]}"})
+        clean_latin = file_bytes.decode('latin-1', errors='ignore').replace('\x00', ' ')
+        gemini_parts.append({"text": f"DOCUMENT: {filename}\n{clean_latin[:15000]}"})
 
     gemini_payload = {
         "contents": [{"parts": gemini_parts}],
