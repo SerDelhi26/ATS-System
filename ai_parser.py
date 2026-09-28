@@ -267,12 +267,22 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
 
 
 def extract_text_from_docx(file_bytes: bytes) -> str:
-    """Extracts text content directly from Word .docx bytes."""
+    """Extracts text content directly from Word .docx bytes, including headers and footers."""
     try:
         if docx is None:
             return ""
         doc = docx.Document(io.BytesIO(file_bytes))
         paragraphs = [p.text for p in doc.paragraphs if p.text]
+        # Include headers & footers where contact info is often stored
+        for section in doc.sections:
+            if hasattr(section, 'header') and section.header:
+                for hp in section.header.paragraphs:
+                    if hp.text and hp.text.strip():
+                        paragraphs.insert(0, hp.text.strip())
+            if hasattr(section, 'footer') and section.footer:
+                for fp in section.footer.paragraphs:
+                    if fp.text and fp.text.strip():
+                        paragraphs.append(fp.text.strip())
         for table in doc.tables:
             for row in table.rows:
                 for cell in row.cells:

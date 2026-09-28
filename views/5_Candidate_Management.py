@@ -594,6 +594,13 @@ with left_col:
                             if len(phones) > 1 and not parsed_res.get("alternate_mobile"):
                                 parsed_res["alternate_mobile"] = phones[1]
 
+                    # Client-side safeguard: if email is missing, scan raw text
+                    if not parsed_res.get("email"):
+                        raw_doc_text = ai_parser.extract_text_from_file(f_bytes, f_name, f_type)
+                        emails = ai_parser.extract_emails(raw_doc_text)
+                        if emails:
+                            parsed_res["email"] = emails[0]
+
                     st.session_state.parsed_candidate_data = parsed_res
                     st.session_state.uploaded_resume_cache = {
                         "name": f_name,
