@@ -687,22 +687,27 @@ Important Rules:
 
         groq_key_pool = get_ordered_key_pool(groq_keys, "groq")
 
-        for idx, key in groq_key_pool:
+        for pool_i, (idx, key) in enumerate(groq_key_pool):
             if time_left() <= 2.0 or total_attempts >= MAX_TOTAL_ATTEMPTS:
                 break
+            rem_groq_keys = len(groq_key_pool) - pool_i
+            call_timeout = max(3, min(6, int(time_left() / max(1, rem_groq_keys + 3))))
+
             for model in groq_models[:2]:
-                rem_timeout = min(10, int(time_left()))
-                if rem_timeout < 2 or total_attempts >= MAX_TOTAL_ATTEMPTS:
+                if time_left() <= 2.0 or total_attempts >= MAX_TOTAL_ATTEMPTS:
                     break
                 total_attempts += 1
-                success, data, msg = _call_groq_api(key, model, system_prompt, extracted_text, timeout=rem_timeout)
+                success, data, msg = _call_groq_api(key, model, system_prompt, extracted_text, timeout=call_timeout)
                 if success:
                     return True, data, f"Resume parsed successfully via Groq AI (Key #{idx})!"
                 if msg in ["RATE_LIMIT_429", "SERVICE_UNAVAILABLE_503"]:
                     errors.append(f"Groq Key #{idx} rate-limited.")
                     break  # Failover immediately to next Groq key in pool
+                elif msg in ["TIMEOUT", "NETWORK_ERROR"]:
+                    errors.append(f"Groq Key #{idx} ({model}): {msg}")
+                    break  # Unresponsive key/endpoint, switch to next key
                 elif "404" in msg:
-                    continue  # Try next model
+                    continue  # Model not found, try fallback model
                 else:
                     errors.append(f"Groq Key #{idx} ({model}): {msg}")
 
@@ -725,21 +730,26 @@ Important Rules:
 
         gemini_key_pool = get_ordered_key_pool(gemini_keys, "gemini")
 
-        for idx, key in gemini_key_pool:
+        for pool_i, (idx, key) in enumerate(gemini_key_pool):
             if time_left() <= 2.0 or total_attempts >= MAX_TOTAL_ATTEMPTS:
                 break
-            # Try primary model first, fallback to next if 503 or 404
+            rem_gemini_keys = len(gemini_key_pool) - pool_i
+            call_timeout = max(3, min(6, int(time_left() / max(1, rem_gemini_keys))))
+
+            # Try primary model first, fallback to next if 404
             for model in gemini_models[:2]:
-                rem_timeout = min(10, int(time_left()))
-                if rem_timeout < 2 or total_attempts >= MAX_TOTAL_ATTEMPTS:
+                if time_left() <= 2.0 or total_attempts >= MAX_TOTAL_ATTEMPTS:
                     break
                 total_attempts += 1
-                success, data, msg = _call_gemini_api(key, model, gemini_payload, timeout=rem_timeout, resume_text=extracted_text)
+                success, data, msg = _call_gemini_api(key, model, gemini_payload, timeout=call_timeout, resume_text=extracted_text)
                 if success:
                     return True, data, f"Resume parsed successfully via Gemini AI (Key #{idx})!"
                 if msg in ["RATE_LIMIT_429", "SERVICE_UNAVAILABLE_503"]:
                     errors.append(f"Gemini Key #{idx} rate-limited.")
                     break  # Failover immediately to next Gemini key in pool
+                elif msg in ["TIMEOUT", "NETWORK_ERROR"]:
+                    errors.append(f"Gemini Key #{idx} ({model}): {msg}")
+                    break  # Unresponsive key/endpoint, switch to next key
                 elif "404" in msg:
                     continue  # Model not found, try fallback model
                 else:
@@ -755,19 +765,24 @@ Important Rules:
         ]
         openrouter_key_pool = get_ordered_key_pool(openrouter_keys, "openrouter")
 
-        for idx, key in openrouter_key_pool:
+        for pool_i, (idx, key) in enumerate(openrouter_key_pool):
             if time_left() <= 2.0 or total_attempts >= MAX_TOTAL_ATTEMPTS:
                 break
+            rem_or_keys = len(openrouter_key_pool) - pool_i
+            call_timeout = max(3, min(8, int(time_left() / max(1, rem_or_keys))))
+
             for model in openrouter_models[:1]:
-                rem_timeout = min(12, int(time_left()))
-                if rem_timeout < 2 or total_attempts >= MAX_TOTAL_ATTEMPTS:
+                if time_left() <= 2.0 or total_attempts >= MAX_TOTAL_ATTEMPTS:
                     break
                 total_attempts += 1
-                success, data, msg = _call_openrouter_api(key, model, system_prompt, extracted_text, timeout=rem_timeout)
+                success, data, msg = _call_openrouter_api(key, model, system_prompt, extracted_text, timeout=call_timeout)
                 if success:
                     return True, data, f"Resume parsed successfully via OpenRouter AI (Key #{idx})!"
-                if msg == "RATE_LIMIT_429":
+                if msg in ["RATE_LIMIT_429", "SERVICE_UNAVAILABLE_503"]:
                     errors.append(f"OpenRouter Key #{idx} rate-limited.")
+                    break
+                elif msg in ["TIMEOUT", "NETWORK_ERROR"]:
+                    errors.append(f"OpenRouter Key #{idx} ({model}): {msg}")
                     break
                 else:
                     errors.append(f"OpenRouter Key #{idx} ({model}): {msg}")
