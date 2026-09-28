@@ -307,15 +307,15 @@ else:
         st.Page("views/2_Dashboard.py", title="Dashboard", icon="📊"),
         st.Page("views/4_Job_Management.py", title="Job Management", icon="💼"),
         st.Page("views/5_Candidate_Management.py", title="Candidate Management", icon="👤"),
-        st.Page("views/9_Talent_Mapping.py", title="Talent Mapping", icon="🗺️"),
         st.Page("views/6_Interview_Management.py", title="Interview Management", icon="📅"),
         st.Page("views/7_Offer_Management.py", title="Offer Management", icon="📄"),
     ]
 
-    # Admins, Admin-Lite and Developers get User Management and Report Management (Hidden completely for Recruiters)
+    # Admins, Admin-Lite and Developers get User Management, Report Management, and Talent Mapping (Hidden completely for Recruiters)
     if st.session_state.user_role in ["Admin", "Developer", "Admin-Lite"]:
         pages_list.insert(1, st.Page("views/3_User_Management.py", title="User Management", icon="👥"))
         pages_list.insert(2, st.Page("views/8_Report_Management.py", title="Report Management", icon="📈"))
+        pages_list.insert(5, st.Page("views/9_Talent_Mapping.py", title="Talent Mapping", icon="🗺️"))
 
     # Future Developer-exclusive modules hook
     if st.session_state.user_role == "Developer":

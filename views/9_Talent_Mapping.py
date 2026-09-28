@@ -79,6 +79,10 @@ if not st.session_state.get("logged_in", False):
     st.switch_page("Home.py")
     st.stop()
 
+if st.session_state.get("user_role") not in ["Admin", "Developer", "Admin-Lite"]:
+    st.error("⛔ Access Denied: Talent Mapping is restricted to Admin, Admin-Lite, and Developer users.")
+    st.stop()
+
 st.set_page_config(
     page_title="Talent Mapping",
     page_icon="🗺️",
