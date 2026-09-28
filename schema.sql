@@ -155,23 +155,53 @@ CREATE TABLE IF NOT EXISTS public.offer_management (
 );
 
 -- ====================================================================
--- SEED DATA (Default Admin User)
--- Default Login: serverdelhi1point@outlook.com
+-- FIRST-RUN ADMIN SETUP (Secure)
+-- 
+-- DO NOT hardcode admin credentials here. Instead, run the setup
+-- function ONCE after deploying the schema to create the first admin:
+--
+--   SELECT create_first_admin(
+--       'Your Name',
+--       'your-email@example.com',
+--       '$2b$12$<your-bcrypt-hash-here>'
+--   );
+--
+-- Generate the bcrypt hash locally with:
+--   python -c "import bcrypt; print(bcrypt.hashpw(b'YourSecurePassword', bcrypt.gensalt()).decode())"
+--
+-- SECURITY: Never commit real credentials to version control.
 -- ====================================================================
-INSERT INTO public.users (
-    full_name, email, role, joining_date, qualification,
-    experience_years, experience_months, status, password_hash
-) VALUES (
-    'System Admin',
-    'serverdelhi1point@outlook.com',
-    'Admin',
-    CURRENT_DATE,
-    'B Tech',
-    5,
-    0,
-    'Active',
-    '$2b$12$ULEqrYow4uPufCXJQA6UM.0ia4/aNx.B31.lwh2Rs3enpfeUAtE/C'
-) ON CONFLICT (email) DO NOTHING;
+CREATE OR REPLACE FUNCTION public.create_first_admin(
+    admin_name TEXT,
+    admin_email TEXT,
+    admin_password_hash TEXT
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    INSERT INTO public.users (
+        full_name, email, role, joining_date, qualification,
+        experience_years, experience_months, status, password_hash
+    ) VALUES (
+        admin_name,
+        lower(trim(admin_email)),
+        'Admin',
+        CURRENT_DATE,
+        'B Tech',
+        5,
+        0,
+        'Active',
+        admin_password_hash
+    ) ON CONFLICT (email) DO NOTHING;
+END;
+$$;
+
+-- Restrict to service_role only (never callable from browser)
+REVOKE EXECUTE ON FUNCTION public.create_first_admin(TEXT, TEXT, TEXT) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.create_first_admin(TEXT, TEXT, TEXT) TO service_role;
 
 -- ====================================================================
 -- STORAGE BUCKETS & POLICIES (Run to enable file uploads)

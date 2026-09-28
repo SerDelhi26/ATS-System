@@ -8,56 +8,10 @@ from common import (
     show_job_notifications,
     show_user_profile,
     render_pagination,
+    render_paginated_section,
     get_master_lookups,
     clear_data_cache
 )
-
-try:
-    from common import render_paginated_section
-except (ImportError, AttributeError):
-    def render_paginated_section(
-        items,
-        render_row_fn,
-        page_size_default=25,
-        key_prefix="page",
-        page_size_options=[25, 50, 100],
-        render_header_fn=None,
-        empty_message="No records found."
-    ):
-        total_items = len(items) if items is not None else 0
-        if total_items == 0:
-            st.info(empty_message)
-            return
-
-        page_items, current_page, total_pages = render_pagination(
-            items, page_size_default=page_size_default, key_prefix=key_prefix, page_size_options=page_size_options
-        )
-
-        if render_header_fn:
-            render_header_fn()
-
-        import inspect
-        sig = inspect.signature(render_row_fn)
-        takes_idx = len(sig.parameters) >= 2
-
-        page_size = page_size_default
-        size_key = f"{key_prefix}_size_select"
-        if size_key in st.session_state and st.session_state[size_key] in page_size_options:
-            page_size = st.session_state[size_key]
-        start_num = (current_page - 1) * page_size + 1
-
-        if hasattr(page_items, "iterrows"):
-            for offset, (_, row) in enumerate(page_items.iterrows()):
-                if takes_idx:
-                    render_row_fn(row, start_num + offset)
-                else:
-                    render_row_fn(row)
-        else:
-            for offset, item in enumerate(page_items):
-                if takes_idx:
-                    render_row_fn(item, start_num + offset)
-                else:
-                    render_row_fn(item)
 import bcrypt
 from theme import apply_theme
 
@@ -182,10 +136,9 @@ if st.session_state.get("reset_user_id"):
                 )
 
             elif not new_password.strip():
-
-                st.error(
-                    "Password cannot be blank."
-                )
+                st.error("Password cannot be blank.")
+            elif len(new_password) < 8 or not any(c.isalpha() for c in new_password) or not any(c.isdigit() for c in new_password):
+                st.error("Password must contain at least 8 characters with both letters and numbers.")
 
             else:
 
@@ -422,9 +375,9 @@ with left_col:
                     "Full Name is mandatory."
                 )
             elif not password.strip():
-                st.error(
-                    "Password is mandatory."
-                )
+                st.error("Password is mandatory.")
+            elif not editing and (len(password) < 8 or not any(c.isalpha() for c in password) or not any(c.isdigit() for c in password)):
+                st.error("Password must contain at least 8 characters with both letters and numbers.")
 
             elif not re.match(
                 email_pattern,

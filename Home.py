@@ -4,7 +4,7 @@ import time
 import base64
 import streamlit as st
 import bcrypt
-from db import supabase
+from db import supabase, supabase_admin
 from theme import apply_theme
 from common import render_logo
 
@@ -59,7 +59,7 @@ def check_login_lockout(email: str) -> tuple[bool, int]:
         return False, 0
 
     try:
-        res = supabase.table("login_attempts").select("failed_count, locked_until").eq("email", clean_email).execute()
+        res = supabase_admin.table("login_attempts").select("failed_count, locked_until").eq("email", clean_email).execute()
         if res.data:
             rec = res.data[0]
             locked_until_str = rec.get("locked_until")
@@ -91,17 +91,17 @@ def record_login_result(email: str, success: bool) -> tuple[bool, int, int]:
         st.session_state.login_failed_attempts = 0
         st.session_state.login_lockout_until = 0.0
         try:
-            supabase.rpc("clear_login_attempts", {"target_email": clean_email}).execute()
+            supabase_admin.rpc("clear_login_attempts", {"target_email": clean_email}).execute()
         except Exception:
             try:
-                supabase.table("login_attempts").delete().eq("email", clean_email).execute()
+                supabase_admin.table("login_attempts").delete().eq("email", clean_email).execute()
             except Exception:
                 pass
         return False, 0, 0
 
     # 1. Primary: Atomic server-side increment & lockout via Postgres RPC
     try:
-        rpc_res = supabase.rpc("record_login_failure", {"target_email": clean_email}).execute()
+        rpc_res = supabase_admin.rpc("record_login_failure", {"target_email": clean_email}).execute()
         if rpc_res.data:
             row = rpc_res.data[0] if isinstance(rpc_res.data, list) else rpc_res.data
             server_failed = row.get("failed_count", 1)
@@ -125,7 +125,7 @@ def record_login_result(email: str, success: bool) -> tuple[bool, int, int]:
     rem_sec = 0
 
     try:
-        res = supabase.table("login_attempts").select("failed_count, locked_until").eq("email", clean_email).execute()
+        res = supabase_admin.table("login_attempts").select("failed_count, locked_until").eq("email", clean_email).execute()
         server_count = (res.data[0].get("failed_count", 0) if res.data else 0) + 1
         new_failed = max(server_count, new_failed)
 
@@ -136,7 +136,7 @@ def record_login_result(email: str, success: bool) -> tuple[bool, int, int]:
             rem_sec = 180
             st.session_state.login_lockout_until = time.time() + 180
 
-        supabase.table("login_attempts").upsert({
+        supabase_admin.table("login_attempts").upsert({
             "email": clean_email,
             "failed_count": new_failed,
             "locked_until": locked_until_iso
@@ -185,10 +185,12 @@ def login_view():
                 st.error("Passwords do not match.")
             elif len(new_password) < 8:
                 st.error("Password must contain at least 8 characters.")
+            elif not any(c.isalpha() for c in new_password) or not any(c.isdigit() for c in new_password):
+                st.error("Password must contain at least one letter and one number.")
             else:
                 try:
                     response = (
-                        supabase
+                        supabase_admin
                         .table("users")
                         .select("user_id, password_hash, status")
                         .eq("email", email.strip())
@@ -197,14 +199,14 @@ def login_view():
                     )
                     
                     if not response.data:
-                        st.error("User not found or inactive.")
+                        st.error("Invalid email, password, or account is inactive.")
                     else:
                         user = response.data[0]
                         if not bcrypt.checkpw(current_password.encode(), user["password_hash"].encode()):
-                            st.error("Current password is incorrect.")
+                            st.error("Invalid email, password, or account is inactive.")
                         else:
                             hashed_password = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
-                            supabase.table("users").update({"password_hash": hashed_password}).eq("user_id", user["user_id"]).execute()
+                            supabase_admin.table("users").update({"password_hash": hashed_password}).eq("user_id", user["user_id"]).execute()
                             st.success("Password changed successfully. Please log in.")
                             st.session_state.password_reset_mode = False
                             st.rerun()
@@ -257,7 +259,7 @@ def login_view():
 
             try:
                 response = (
-                    supabase
+                    supabase_admin
                     .table("users")
                     .select("user_id, full_name, role, password_hash, status")
                     .eq("email", clean_email)
@@ -271,7 +273,7 @@ def login_view():
                         st.error("🚨 5 consecutive failed attempts. Account temporarily locked for 3 minutes.")
                     else:
                         remaining = max(1, 5 - failed_cnt)
-                        st.error(f"Invalid email or account is inactive. ({remaining} attempts remaining before 3-minute lockout)")
+                        st.error(f"Invalid email or password. ({remaining} attempts remaining before 3-minute lockout)")
                 else:
                     user = response.data[0]
                     
@@ -290,7 +292,7 @@ def login_view():
                             st.error("🚨 5 consecutive failed attempts. Account temporarily locked for 3 minutes.")
                         else:
                             remaining = max(1, 5 - failed_cnt)
-                            st.error(f"Incorrect password. ({remaining} attempts remaining before 3-minute lockout)")
+                            st.error(f"Invalid email or password. ({remaining} attempts remaining before 3-minute lockout)")
             except Exception as e:
                 st.error(f"Login error: {str(e)}")
 

@@ -11,55 +11,10 @@ from common import (
     render_pagination,
     fetch_all_legacy_candidates,
     fetch_all_live_candidates,
-    clear_data_cache
+    clear_data_cache,
+    get_master_lookups,
+    render_paginated_section
 )
-
-try:
-    from common import render_paginated_section
-except (ImportError, AttributeError):
-    def render_paginated_section(
-        items,
-        render_row_fn,
-        page_size_default=25,
-        key_prefix="page",
-        page_size_options=[25, 50, 100],
-        render_header_fn=None,
-        empty_message="No records found."
-    ):
-        total_items = len(items) if items is not None else 0
-        if total_items == 0:
-            st.info(empty_message)
-            return
-
-        page_items, current_page, total_pages = render_pagination(
-            items, page_size_default=page_size_default, key_prefix=key_prefix, page_size_options=page_size_options
-        )
-
-        if render_header_fn:
-            render_header_fn()
-
-        import inspect
-        sig = inspect.signature(render_row_fn)
-        takes_idx = len(sig.parameters) >= 2
-
-        page_size = page_size_default
-        size_key = f"{key_prefix}_size_select"
-        if size_key in st.session_state and st.session_state[size_key] in page_size_options:
-            page_size = st.session_state[size_key]
-        start_num = (current_page - 1) * page_size + 1
-
-        if hasattr(page_items, "iterrows"):
-            for offset, (_, row) in enumerate(page_items.iterrows()):
-                if takes_idx:
-                    render_row_fn(row, start_num + offset)
-                else:
-                    render_row_fn(row)
-        else:
-            for offset, item in enumerate(page_items):
-                if takes_idx:
-                    render_row_fn(item, start_num + offset)
-                else:
-                    render_row_fn(item)
 from theme import apply_theme
 import storage
 import ai_parser
@@ -117,12 +72,11 @@ def normalize_phone(phone):
     return digits[-10:] if len(digits) >= 10 else digits
 
 
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=120)
 def get_jobs_for_user(
     user_id,
     user_role
 ):
-
     if user_role in ["Admin", "Developer", "Admin-Lite"]:
         return (
             supabase
@@ -161,15 +115,13 @@ def get_jobs_for_user(
         )
 
 
-@st.cache_data(ttl=15)
 def get_categories():
-    return supabase.table("category_master").select("*").execute().data or []
+    return get_master_lookups().get("categories", [])
 
-@st.cache_data(ttl=15)
 def get_sub_categories():
-    return supabase.table("sub_category_master").select("*").execute().data or []
+    return get_master_lookups().get("sub_categories", [])
 
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=120)
 def get_all_jobs_summary():
     return (
         supabase
@@ -185,39 +137,33 @@ def upload_resume(uploaded_file, category_name, sub_category_name, job_ref, file
 def get_resume_url(file_path):
     return storage.get_file_path("resumes", file_path)
 
-
-@st.cache_data(ttl=15)
 def get_job_titles():
-    return (
-        supabase
-        .table("job_title_master")
-        .select("*")
-        .execute()
-        .data or []
-    )
+    return get_master_lookups().get("job_titles", [])
 
-
-@st.cache_data(ttl=15)
 def get_companies():
-    return (
-        supabase
-        .table("company_master")
-        .select("*")
-        .execute()
-        .data or []
-    )
+    return get_master_lookups().get("companies", [])
 
-
-@st.cache_data(ttl=15)
 def get_recruiters():
-    return (
-        supabase
-        .table("users")
-        .select("full_name")
-        .in_("role", ["Recruiter", "Admin-Lite"])
-        .execute()
-        .data or []
-    )
+    all_users = get_master_lookups().get("users", [])
+    return [u for u in all_users if u.get("role") in ["Recruiter", "Admin-Lite"] and u.get("status", "Active") == "Active"]
+
+@st.cache_data(ttl=300)
+def get_processed_legacy_candidates():
+    """Fetches and caches legacy candidates with computed status flags for 5 minutes."""
+    fields_leg = "legacy_candidate_id, candidate_reference_no, first_name, last_name, gender, email, mobile_no, alternate_mobile, current_company, current_designation, experience_years, experience_months, current_ctc, expected_ctc, current_location, notice_period, notice_negotiable, skills, qualification, education_details, resume_name, resume_path, created_on, is_migrated_to_active, migrated_candidate_id"
+    raw_data = fetch_all_legacy_candidates(fields_leg)
+    processed = []
+    for lc in raw_data:
+        item = dict(lc)
+        nn = str(item.get("notice_negotiable") or "").strip()
+        if nn.startswith("Deactivated:"):
+            item["status"] = nn.replace("Deactivated:", "").strip()
+            item["is_deactivated"] = True
+        else:
+            item["status"] = "Active Archive"
+            item["is_deactivated"] = False
+        processed.append(item)
+    return processed
 
 if "parsed_candidate_data" not in st.session_state:
     st.session_state.parsed_candidate_data = {}
@@ -1626,9 +1572,46 @@ with left_col:
                 st.session_state.uploaded_resume_cache = None
                 st.session_state.candidate_form_reset += 1
                 st.rerun()
- # ==========================
+# ==========================
 # RIGHT PANEL
 # ==========================
+
+@st.cache_data(ttl=120)
+def get_duplicate_candidate_clusters():
+    """Scans and groups candidate profiles sharing identical phone numbers or emails."""
+    all_cands_resp = fetch_all_live_candidates("candidate_id, candidate_reference_no, first_name, last_name, email, mobile_no, alternate_mobile, current_company, current_designation, skills, experience_years, expected_ctc, current_location, current_stage, candidate_status, job_id, resume_path, created_on, created_by_name, remarks")
+    phone_groups = {}
+    email_groups = {}
+    for c in all_cands_resp:
+        p = normalize_phone(c.get("mobile_no"))
+        if p and len(p) == 10:
+            phone_groups.setdefault(p, []).append(c)
+        e = (c.get("email") or "").strip().lower()
+        if e and "@" in e:
+            email_groups.setdefault(e, []).append(c)
+
+    duplicate_clusters = []
+    seen_cand_ids = set()
+    for p, group in phone_groups.items():
+        if len(group) >= 2:
+            ids = tuple(sorted([c["candidate_id"] for c in group]))
+            if ids not in seen_cand_ids:
+                seen_cand_ids.add(ids)
+                duplicate_clusters.append({
+                    "type": f"Phone Match: {p}",
+                    "candidates": group
+                })
+
+    for e, group in email_groups.items():
+        if len(group) >= 2:
+            ids = tuple(sorted([c["candidate_id"] for c in group]))
+            if ids not in seen_cand_ids:
+                seen_cand_ids.add(ids)
+                duplicate_clusters.append({
+                    "type": f"Email Match: {e}",
+                    "candidates": group
+                })
+    return duplicate_clusters
 
 with right_col:
     tab_dir, tab_legacy, tab_ai_search, tab_merge = st.tabs([
@@ -1944,19 +1927,8 @@ with right_col:
         st.markdown("## 🏛️ Legacy & Deactivated Candidate Archive")
         st.caption("Search, filter, inspect, and manage historical candidate records, including active archive talent and deactivated profiles (Retired, Deceased, Inactive, Blacklisted).")
 
-        # 1. Fetch all legacy candidates via pagination
-        fields_leg = "legacy_candidate_id, candidate_reference_no, first_name, last_name, gender, email, mobile_no, alternate_mobile, current_company, current_designation, experience_years, experience_months, current_ctc, expected_ctc, current_location, notice_period, notice_negotiable, skills, qualification, education_details, resume_name, resume_path, created_on, is_migrated_to_active, migrated_candidate_id"
-        leg_raw_data = fetch_all_legacy_candidates(fields_leg)
-
-        # Compute status for each legacy record
-        for lc in leg_raw_data:
-            nn = str(lc.get("notice_negotiable") or "").strip()
-            if nn.startswith("Deactivated:"):
-                lc["status"] = nn.replace("Deactivated:", "").strip()
-                lc["is_deactivated"] = True
-            else:
-                lc["status"] = "Active Archive"
-                lc["is_deactivated"] = False
+        # 1. Fetch cached legacy candidates (5-minute cache with precomputed status)
+        leg_raw_data = get_processed_legacy_candidates()
 
         # Summary Metrics Cards
         total_leg_count = len(leg_raw_data)
@@ -2332,47 +2304,25 @@ with right_col:
         st.markdown("### 🛡️ Candidate Duplicate Cleanup & Merge Assistant")
         st.caption("Automatically detects candidate profiles sharing the same Mobile Number or Email across different jobs, allowing you to merge them into a single unified record.")
 
-        all_cands_resp = fetch_all_live_candidates("candidate_id, candidate_reference_no, first_name, last_name, email, mobile_no, alternate_mobile, current_company, current_designation, skills, experience_years, expected_ctc, current_location, current_stage, candidate_status, job_id, resume_path, created_on, created_by_name, remarks")
+        dup_scan_key = "run_duplicate_scan"
+        is_scan_active = st.session_state.get(dup_scan_key, False)
 
-        phone_groups = {}
-        email_groups = {}
+        btn_c1, btn_c2 = st.columns([0.35, 0.65])
+        with btn_c1:
+            if st.button("🔍 Scan for Duplicate Profiles", key="btn_run_dup_scan", use_container_width=True, type="primary" if not is_scan_active else "secondary"):
+                get_duplicate_candidate_clusters.clear()
+                st.session_state[dup_scan_key] = True
+                is_scan_active = True
 
-        for c in all_cands_resp:
-            p = normalize_phone(c.get("mobile_no"))
-            if p and len(p) == 10:
-                phone_groups.setdefault(p, []).append(c)
-
-            e = (c.get("email") or "").strip().lower()
-            if e and "@" in e:
-                email_groups.setdefault(e, []).append(c)
-
-        duplicate_clusters = []
-        seen_cand_ids = set()
-
-        for p, group in phone_groups.items():
-            if len(group) >= 2:
-                ids = tuple(sorted([c["candidate_id"] for c in group]))
-                if ids not in seen_cand_ids:
-                    seen_cand_ids.add(ids)
-                    duplicate_clusters.append({
-                        "type": f"Phone Match: {p}",
-                        "candidates": group
-                    })
-
-        for e, group in email_groups.items():
-            if len(group) >= 2:
-                ids = tuple(sorted([c["candidate_id"] for c in group]))
-                if ids not in seen_cand_ids:
-                    seen_cand_ids.add(ids)
-                    duplicate_clusters.append({
-                        "type": f"Email Match: {e}",
-                        "candidates": group
-                    })
-
-        if not duplicate_clusters:
-            st.success("✅ **Clean Database!** No duplicate candidate profiles detected.")
+        if not is_scan_active:
+            st.info("💡 Click **'Scan for Duplicate Profiles'** above to search the database for candidate profiles sharing the same mobile number or email address.")
         else:
-            st.warning(f"⚠️ Found **{len(duplicate_clusters)} potential duplicate candidate group(s)**.")
+            duplicate_clusters = get_duplicate_candidate_clusters()
+
+            if not duplicate_clusters:
+                st.success("✅ **Clean Database!** No duplicate candidate profiles detected.")
+            else:
+                st.warning(f"⚠️ Found **{len(duplicate_clusters)} potential duplicate candidate group(s)**.")
 
             for d_idx, cluster in enumerate(duplicate_clusters, 1):
                 c_list = cluster["candidates"]

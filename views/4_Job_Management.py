@@ -15,55 +15,9 @@ from common import (
     fetch_all_from_table,
     clear_data_cache,
     get_master_lookups,
-    get_unified_candidate_pool
+    get_unified_candidate_pool,
+    render_paginated_section
 )
-
-try:
-    from common import render_paginated_section
-except (ImportError, AttributeError):
-    def render_paginated_section(
-        items,
-        render_row_fn,
-        page_size_default=25,
-        key_prefix="page",
-        page_size_options=[25, 50, 100],
-        render_header_fn=None,
-        empty_message="No records found."
-    ):
-        total_items = len(items) if items is not None else 0
-        if total_items == 0:
-            st.info(empty_message)
-            return
-
-        page_items, current_page, total_pages = render_pagination(
-            items, page_size_default=page_size_default, key_prefix=key_prefix, page_size_options=page_size_options
-        )
-
-        if render_header_fn:
-            render_header_fn()
-
-        import inspect
-        sig = inspect.signature(render_row_fn)
-        takes_idx = len(sig.parameters) >= 2
-
-        page_size = page_size_default
-        size_key = f"{key_prefix}_size_select"
-        if size_key in st.session_state and st.session_state[size_key] in page_size_options:
-            page_size = st.session_state[size_key]
-        start_num = (current_page - 1) * page_size + 1
-
-        if hasattr(page_items, "iterrows"):
-            for offset, (_, row) in enumerate(page_items.iterrows()):
-                if takes_idx:
-                    render_row_fn(row, start_num + offset)
-                else:
-                    render_row_fn(row)
-        else:
-            for offset, item in enumerate(page_items):
-                if takes_idx:
-                    render_row_fn(item, start_num + offset)
-                else:
-                    render_row_fn(item)
 from theme import apply_theme
 import storage
 from matcher import calculate_candidate_match, get_top_matched_candidates
@@ -140,6 +94,41 @@ def get_recruiters():
 def get_all_candidates_for_matching():
     """Delegates to the centralized, memory-cached unified candidate pool."""
     return get_unified_candidate_pool()
+
+@st.cache_data(ttl=120)
+def get_total_candidate_count() -> int:
+    """Fetches total candidate count via lightweight metadata queries without downloading row data."""
+    try:
+        live_cnt = supabase.table("candidate_management").select("candidate_id", count="exact").limit(0).execute().count or 0
+        legacy_cnt = supabase.table("legacy_candidates").select("legacy_candidate_id", count="exact").limit(0).execute().count or 0
+        return live_cnt + legacy_cnt
+    except Exception:
+        return 0
+
+@st.cache_data(ttl=60)
+def get_recruiter_pipeline_metrics(user_id: int):
+    """Fetches assigned job count and active pipeline candidates directly via fast filtered query."""
+    try:
+        my_open_jobs = get_cached_open_jobs(is_admin=False, user_id=user_id)
+        open_job_ids = [j["job_id"] for j in my_open_jobs]
+        assigned_open_count = len(open_job_ids)
+        if not open_job_ids:
+            return 0, 0
+        terminal_statuses = {"rejected", "hired", "joined", "offer rejected", "declined", "cancelled", "blacklisted", "inactive", "inactive / left market", "retired", "deceased"}
+        res = (
+            supabase.table("candidate_management")
+            .select("candidate_id, candidate_status, current_stage")
+            .in_("job_id", open_job_ids)
+            .execute()
+        )
+        active_count = sum(
+            1 for c in (res.data or [])
+            if str(c.get("candidate_status") or "").strip().lower() not in terminal_statuses
+            and str(c.get("current_stage") or "").strip().lower() not in terminal_statuses
+        )
+        return assigned_open_count, active_count
+    except Exception:
+        return 0, 0
 
 @st.cache_data(ttl=60)
 def get_cached_job_assignments():
@@ -923,31 +912,20 @@ if is_admin:
 # RIGHT PANEL (JOB MANAGEMENT & MATCHING)
 # ==========================
 with right_col:
-    all_candidates_db = get_all_candidates_for_matching()
+    total_candidate_count = get_total_candidate_count()
 
     # Recruiter & Admin KPI Banner
     if not is_admin:
-        my_open_jobs = get_cached_open_jobs(is_admin=False, user_id=st.session_state.user_id)
-        open_job_ids = {j["job_id"] for j in my_open_jobs}
-        assigned_open_count = len(open_job_ids)
-        
-        terminal_statuses = {"rejected", "hired", "joined", "offer rejected", "declined", "cancelled", "blacklisted", "inactive", "inactive / left market", "retired", "deceased"}
-        my_assigned_candidates = [
-            c for c in all_candidates_db 
-            if c.get("job_id") in open_job_ids 
-            and str(c.get("candidate_status") or "").strip().lower() not in terminal_statuses
-            and str(c.get("current_stage") or "").strip().lower() not in terminal_statuses
-        ]
-        
+        assigned_open_count, pipeline_count = get_recruiter_pipeline_metrics(st.session_state.get("user_id"))
         kpi_col1, kpi_col2, kpi_col3 = st.columns(3)
         kpi_col1.metric("📌 Assigned Open Jobs", f"{assigned_open_count}")
-        kpi_col2.metric("👥 Candidates in Pipeline", f"{len(my_assigned_candidates)}")
-        kpi_col3.metric("🎯 Total Candidate Pool", f"{len(all_candidates_db)}")
+        kpi_col2.metric("👥 Candidates in Pipeline", f"{pipeline_count}")
+        kpi_col3.metric("🎯 Total Candidate Pool", f"{total_candidate_count}")
     else:
         kpi_col1, kpi_col2, kpi_col3 = st.columns(3)
         kpi_col1.metric("💼 Active Recruiters", f"{len(recruiters)}")
         kpi_col2.metric("🏢 Client Companies", f"{len(companies)}")
-        kpi_col3.metric("🎯 Total Candidate Pool", f"{len(all_candidates_db)}")
+        kpi_col3.metric("🎯 Total Candidate Pool", f"{total_candidate_count}")
 
     st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
     
@@ -1141,72 +1119,84 @@ with right_col:
                         with q_col3:
                             inl_pool = st.selectbox("👥 Pool", ["All (Live + Legacy)", "Live Only", "Legacy Only"], key=f"inl_pool_{row['job_id']}")
 
-                        top_matches = get_inline_top_matches_cached(
-                            job_dict,
-                            inl_pool,
-                            limit=10,
-                            min_score=35,
-                            exp_leeway=inl_leeway,
-                            budget_stretch=inl_stretch
-                        )
-                        
-                        if top_matches:
-                            st.markdown(f"Found **{len(top_matches)} candidate(s)** matching this job (with +/-{inl_leeway} Yrs exp leeway & +{inl_stretch}% budget stretch):")
+                        match_active_key = f"active_match_{row['job_id']}"
+                        is_matching_active = st.session_state.get(match_active_key, False)
+
+                        btn_col1, btn_col2 = st.columns([0.42, 0.58])
+                        with btn_col1:
+                            if st.button("🔍 Find Matching Candidates", key=f"btn_run_match_{row['job_id']}", use_container_width=True, type="primary" if not is_matching_active else "secondary"):
+                                st.session_state[match_active_key] = True
+                                is_matching_active = True
+
+                        if is_matching_active:
+                            top_matches = get_inline_top_matches_cached(
+                                job_dict,
+                                inl_pool,
+                                limit=10,
+                                min_score=35,
+                                exp_leeway=inl_leeway,
+                                budget_stretch=inl_stretch
+                            )
                             
-                            for item in top_matches:
-                                cand = item["candidate"]
-                                match = item["match"]
+                            if top_matches:
+                                st.markdown(f"Found **{len(top_matches)} candidate(s)** matching this job (with +/-{inl_leeway} Yrs exp leeway & +{inl_stretch}% budget stretch):")
                                 
-                                c_fullname = f"{cand.get('first_name', '')} {cand.get('last_name', '')}".strip()
-                                cand_ref = cand.get('candidate_reference_no', f"CAN-{cand.get('candidate_id')}")
-                                is_legacy_cand = cand.get("is_legacy", False)
-                                pool_badge = "<span style='background:rgba(99, 102, 241, 0.15); color:#818CF8; border:1px solid rgba(99, 102, 241, 0.35); font-size:11px; padding:2px 8px; border-radius:10px; font-weight:bold; margin-right:6px;'>🏛️ Legacy Archive</span>" if is_legacy_cand else "<span style='background:rgba(34, 197, 94, 0.15); color:#4ADE80; border:1px solid rgba(34, 197, 94, 0.35); font-size:11px; padding:2px 8px; border-radius:10px; font-weight:bold; margin-right:6px;'>🟢 Live Pool</span>"
-                                
-                                with st.container(border=True):
-                                    t1_h1, t1_h2 = st.columns([0.7, 0.3])
-                                    with t1_h1:
-                                        st.markdown(
-                                            f"{pool_badge} <span style='font-weight:700; font-size:15px;'>{cand_ref} | {c_fullname}</span> &nbsp; <span style='opacity:0.8; font-size:13px;'>{cand.get('current_designation', 'Candidate')} at {cand.get('current_company', 'N/A')}</span>",
-                                            unsafe_allow_html=True
-                                        )
-                                    with t1_h2:
-                                        st.markdown(
-                                            f"<div style='text-align:right;'><span style='background:{match['badge_color']}; color:white; padding:4px 12px; border-radius:12px; font-weight:bold; font-size:13px;'>{match['total_match_pct']}% Match ({match['match_tier']})</span></div>",
-                                            unsafe_allow_html=True
-                                        )
-
-                                    mc1, mc2, mc3, mc4 = st.columns(4)
-                                    with mc1:
-                                        st.caption(f"🛠️ **Skills:** {match['skill_score']}/40 pts ({len(match['matched_skills'])} matched)")
-                                    with mc2:
-                                        st.caption(f"⏳ **Exp:** {match['exp_msg']}")
-                                    with mc3:
-                                        st.caption(f"💰 **CTC:** {match['budget_msg']}")
-                                    with mc4:
-                                        st.caption(f"📍 **Location:** {match['loc_msg']}")
-
-                                    m_col1, m_col2, m_col3 = st.columns([0.38, 0.32, 0.3])
+                                for item in top_matches:
+                                    cand = item["candidate"]
+                                    match = item["match"]
                                     
-                                    is_already_on_job = cand.get("job_id") == row["job_id"]
-                                    if is_already_on_job:
-                                        m_col1.caption("✅ Already assigned to this job")
-                                    else:
-                                        map_btn_label = f"📥 Promote & Map to Job" if is_legacy_cand else f"📥 Map to this Job"
-                                        if m_col1.button(map_btn_label, key=f"map_{row['job_id']}_{cand['candidate_id']}", use_container_width=True):
-                                            if map_candidate_to_job(cand, row["job_id"]):
-                                                st.success(f"Candidate {c_fullname} mapped to {row['job_reference_no']}!")
-                                                st.rerun(scope="app")
-                                                
-                                    if cand.get("resume_path"):
-                                        if m_col2.button(f"📄 View CV", key=f"cv_{row['job_id']}_{cand['candidate_id']}", use_container_width=True):
-                                            st.session_state.selected_job_doc = cand["resume_path"]
-                                            st.rerun(scope="app")
-                                    else:
-                                        m_col2.caption("No CV uploaded")
+                                    c_fullname = f"{cand.get('first_name', '')} {cand.get('last_name', '')}".strip()
+                                    cand_ref = cand.get('candidate_reference_no', f"CAN-{cand.get('candidate_id')}")
+                                    is_legacy_cand = cand.get("is_legacy", False)
+                                    pool_badge = "<span style='background:rgba(99, 102, 241, 0.15); color:#818CF8; border:1px solid rgba(99, 102, 241, 0.35); font-size:11px; padding:2px 8px; border-radius:10px; font-weight:bold; margin-right:6px;'>🏛️ Legacy Archive</span>" if is_legacy_cand else "<span style='background:rgba(34, 197, 94, 0.15); color:#4ADE80; border:1px solid rgba(34, 197, 94, 0.35); font-size:11px; padding:2px 8px; border-radius:10px; font-weight:bold; margin-right:6px;'>🟢 Live Pool</span>"
+                                    
+                                    with st.container(border=True):
+                                        t1_h1, t1_h2 = st.columns([0.7, 0.3])
+                                        with t1_h1:
+                                            st.markdown(
+                                                f"{pool_badge} <span style='font-weight:700; font-size:15px;'>{cand_ref} | {c_fullname}</span> &nbsp; <span style='opacity:0.8; font-size:13px;'>{cand.get('current_designation', 'Candidate')} at {cand.get('current_company', 'N/A')}</span>",
+                                                unsafe_allow_html=True
+                                            )
+                                        with t1_h2:
+                                            st.markdown(
+                                                f"<div style='text-align:right;'><span style='background:{match['badge_color']}; color:white; padding:4px 12px; border-radius:12px; font-weight:bold; font-size:13px;'>{match['total_match_pct']}% Match ({match['match_tier']})</span></div>",
+                                                unsafe_allow_html=True
+                                            )
+
+                                        mc1, mc2, mc3, mc4 = st.columns(4)
+                                        with mc1:
+                                            st.caption(f"🛠️ **Skills:** {match['skill_score']}/40 pts ({len(match['matched_skills'])} matched)")
+                                        with mc2:
+                                            st.caption(f"⏳ **Exp:** {match['exp_msg']}")
+                                        with mc3:
+                                            st.caption(f"💰 **CTC:** {match['budget_msg']}")
+                                        with mc4:
+                                            st.caption(f"📍 **Location:** {match['loc_msg']}")
+
+                                        m_col1, m_col2, m_col3 = st.columns([0.38, 0.32, 0.3])
                                         
-                                    m_col3.caption(f"📞 {cand.get('mobile_no', '-')} | ✉️ {cand.get('email', '-')}")
+                                        is_already_on_job = cand.get("job_id") == row["job_id"]
+                                        if is_already_on_job:
+                                            m_col1.caption("✅ Already assigned to this job")
+                                        else:
+                                            map_btn_label = f"📥 Promote & Map to Job" if is_legacy_cand else f"📥 Map to this Job"
+                                            if m_col1.button(map_btn_label, key=f"map_{row['job_id']}_{cand['candidate_id']}", use_container_width=True):
+                                                if map_candidate_to_job(cand, row["job_id"]):
+                                                    st.success(f"Candidate {c_fullname} mapped to {row['job_reference_no']}!")
+                                                    st.rerun(scope="app")
+                                                    
+                                        if cand.get("resume_path"):
+                                            if m_col2.button(f"📄 View CV", key=f"cv_{row['job_id']}_{cand['candidate_id']}", use_container_width=True):
+                                                st.session_state.selected_job_doc = cand["resume_path"]
+                                                st.rerun(scope="app")
+                                        else:
+                                            m_col2.caption("No CV uploaded")
+                                            
+                                        m_col3.caption(f"📞 {cand.get('mobile_no', '-')} | ✉️ {cand.get('email', '-')}")
+                            else:
+                                st.info("No candidates in the database currently match this job's criteria. Try adjusting the Leeway or Budget Stretch options above.")
                         else:
-                            st.info("No candidates in the database currently match this job's criteria. Try adjusting the Leeway or Budget Stretch options above.")
+                            st.info("💡 Click **'Find Matching Candidates'** above to search and rank the best candidates from the database for this specific job.")
                     
                     st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
 

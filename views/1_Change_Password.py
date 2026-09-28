@@ -1,6 +1,6 @@
 import streamlit as st
 import bcrypt
-from db import supabase
+from db import supabase_admin
 from theme import apply_theme
 from common import show_logout, show_job_notifications, show_user_profile
 
@@ -35,17 +35,18 @@ with st.sidebar:
 st.markdown("# 🔑 Change Password")
 st.info("Enter your current password and choose a new password.")
 
-# Pre-fill email automatically since the user is logged in
+# Pre-fill email automatically from the logged-in session user
+user_id = st.session_state.get("user_id")
 user_email = ""
-if st.session_state.get("user_id"):
+if user_id:
     try:
-        res = supabase.table("users").select("email").eq("user_id", st.session_state.user_id).single().execute()
+        res = supabase_admin.table("users").select("email").eq("user_id", user_id).single().execute()
         if res.data:
             user_email = res.data.get("email", "")
-    except:
+    except Exception:
         pass
 
-email = st.text_input("Email", value=user_email)
+st.text_input("Account Email", value=user_email, disabled=True, help="Password changes apply strictly to your active logged-in account.")
 current_password = st.text_input("Current Password", type="password")
 new_password = st.text_input("New Password", type="password")
 confirm_password = st.text_input("Confirm New Password", type="password")
@@ -53,9 +54,9 @@ confirm_password = st.text_input("Confirm New Password", type="password")
 change_password = st.button("🔑 Change Password", use_container_width=True)
 
 if change_password:
-    
-    if not email.strip():
-        st.error("Email is required.")
+    if not user_id:
+        st.error("Authentication session expired. Please re-login.")
+        st.stop()
     elif not current_password.strip():
         st.error("Current password is required.")
     elif not new_password.strip():
@@ -64,12 +65,14 @@ if change_password:
         st.error("Passwords do not match.")
     elif len(new_password) < 8:
         st.error("Password must contain at least 8 characters.")
+    elif not any(c.isalpha() for c in new_password) or not any(c.isdigit() for c in new_password):
+        st.error("Password must contain at least one letter and one number.")
     else:
         response = (
-            supabase
+            supabase_admin
             .table("users")
             .select("user_id, password_hash, status")
-            .eq("email", email.strip())
+            .eq("user_id", user_id)
             .eq("status", "Active")
             .execute()
         )
@@ -87,7 +90,7 @@ if change_password:
                 )
 
                 (
-                    supabase
+                    supabase_admin
                     .table("users")
                     .update({"password_hash": hashed_password})
                     .eq("user_id", user["user_id"])

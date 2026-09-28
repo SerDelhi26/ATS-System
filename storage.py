@@ -7,7 +7,7 @@ import logging
 import requests
 from dotenv import load_dotenv
 import streamlit as st
-from db import supabase
+from db import supabase_admin, get_secret
 
 logger = logging.getLogger("storage")
 
@@ -21,16 +21,7 @@ load_dotenv()
 # ==============================================================================
 # MICROSOFT GRAPH ONEDRIVE CONFIGURATION (1 TB CLOUD STORAGE)
 # ==============================================================================
-def get_secret_val(key: str, default: str = "") -> str:
-    val = os.getenv(key)
-    if val:
-        return val
-    try:
-        if key in st.secrets:
-            return st.secrets[key]
-    except Exception:
-        pass
-    return default
+get_secret_val = get_secret  # Unified secret retrieval helper
 
 MICROSOFT_CLIENT_ID = get_secret_val("MICROSOFT_CLIENT_ID", "")
 MICROSOFT_CLIENT_SECRET = get_secret_val("MICROSOFT_CLIENT_SECRET", "")
@@ -88,7 +79,8 @@ def _get_storage_base_dir() -> str:
         base = str(env_dir).strip()
     else:
         if os.name == 'nt':
-            base = r"C:\Users\dell\Documents\OneDrive\Apps\ATS_Storage"
+            dynamic_user_path = os.path.expanduser(r"~\Documents\OneDrive\Apps\ATS_Storage")
+            base = dynamic_user_path if os.path.exists(os.path.dirname(dynamic_user_path)) else r"C:\Users\dell\Documents\OneDrive\Apps\ATS_Storage"
         else:
             base = "/tmp/ATS_Storage"
     
@@ -233,6 +225,10 @@ def save_job_document(uploaded_file, category_name: str, sub_category_name: str,
             original_name = custom_name if custom_name else getattr(uploaded_file, "name", "document.pdf")
             file_bytes = uploaded_file.getvalue() if hasattr(uploaded_file, "getvalue") else uploaded_file.read()
 
+        if len(file_bytes) > MAX_FILE_SIZE_BYTES:
+            st.error(f"Uploaded file exceeds maximum limit of {MAX_FILE_SIZE_BYTES // (1024 * 1024)}MB.")
+            return None
+
         safe_name = sanitize_filename(original_name)
         cat = sanitize_folder_name(category_name)
         sub = sanitize_folder_name(sub_category_name)
@@ -247,7 +243,7 @@ def save_job_document(uploaded_file, category_name: str, sub_category_name: str,
         if not onedrive_ok:
             try:
                 target_name = os.path.basename(rel_path)
-                supabase.storage.from_("job_documents").upload(
+                supabase_admin.storage.from_("job_documents").upload(
                     path=target_name,
                     file=file_bytes,
                     file_options={"upsert": "true"}
@@ -303,6 +299,10 @@ def save_candidate_resume(uploaded_file, category_name: str, sub_category_name: 
             original_name = custom_name if custom_name else getattr(uploaded_file, "name", "document.pdf")
             file_bytes = uploaded_file.getvalue() if hasattr(uploaded_file, "getvalue") else uploaded_file.read()
 
+        if len(file_bytes) > MAX_FILE_SIZE_BYTES:
+            st.error(f"Uploaded file exceeds maximum limit of {MAX_FILE_SIZE_BYTES // (1024 * 1024)}MB.")
+            return None
+
         safe_name = sanitize_filename(original_name)
         cat = sanitize_folder_name(category_name)
         sub = sanitize_folder_name(sub_category_name)
@@ -317,7 +317,7 @@ def save_candidate_resume(uploaded_file, category_name: str, sub_category_name: 
         if not onedrive_ok:
             try:
                 target_name = os.path.basename(rel_path)
-                supabase.storage.from_("Resume").upload(
+                supabase_admin.storage.from_("Resume").upload(
                     path=target_name,
                     file=file_bytes,
                     file_options={"upsert": "true"}
@@ -356,38 +356,64 @@ def save_candidate_resume(uploaded_file, category_name: str, sub_category_name: 
         return None
 
 
+MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024  # 25 MB max upload limit
+
+
+def is_safe_storage_path(target_path: str) -> bool:
+    """Verifies that a resolved file path is safely contained within allowed storage roots."""
+    try:
+        resolved = os.path.abspath(target_path)
+        allowed_roots = [
+            os.path.abspath(STORAGE_BASE_DIR),
+            os.path.abspath(RESUMES_DIR),
+            os.path.abspath(JOB_DOCS_DIR),
+            os.path.abspath(LEGACY_RESUMES_DIR),
+        ]
+        return any(os.path.commonpath([resolved, root]) == root for root in allowed_roots)
+    except Exception:
+        return False
+
+
 def resolve_file_path(path_or_filename: str, category: str = None) -> str:
     """
     Resolves an absolute file path whether given a relative hierarchical path,
     an absolute path, or a legacy flat filename.
+    Guarantees path containment to prevent path traversal attacks.
     """
     if not path_or_filename:
         return None
     
     clean_input = str(path_or_filename).strip()
 
+    # Prevent basic path traversal sequences
+    if ".." in clean_input:
+        logger.warning(f"Rejected suspicious path containing traversal: {clean_input}")
+        return None
+
     # 1. Check direct relative path from base dir
     candidate_abs = os.path.join(STORAGE_BASE_DIR, clean_input.replace("/", os.sep))
-    if os.path.exists(candidate_abs):
+    if os.path.exists(candidate_abs) and is_safe_storage_path(candidate_abs):
         return candidate_abs
 
-    # 2. Check if already an existing absolute path
-    if os.path.isabs(clean_input) and os.path.exists(clean_input):
+    # 2. Check if already an existing absolute path within storage bounds
+    if os.path.isabs(clean_input) and os.path.exists(clean_input) and is_safe_storage_path(clean_input):
         return clean_input
 
     # 3. Check flat folders (resumes, job_documents, legacy_resumes)
     target_name = os.path.basename(clean_input)
     for folder in [RESUMES_DIR, JOB_DOCS_DIR, LEGACY_RESUMES_DIR]:
         flat_p = os.path.join(folder, target_name)
-        if os.path.exists(flat_p):
+        if os.path.exists(flat_p) and is_safe_storage_path(flat_p):
             return flat_p
 
     # 4. Search recursively for filename in STORAGE_BASE_DIR (safety net)
     for root, _, files in os.walk(STORAGE_BASE_DIR):
         if target_name in files:
-            return os.path.join(root, target_name)
+            found_p = os.path.join(root, target_name)
+            if is_safe_storage_path(found_p):
+                return found_p
 
-    return candidate_abs
+    return candidate_abs if is_safe_storage_path(candidate_abs) else None
 
 
 def read_file_bytes(path_or_filename: str, category: str = None) -> bytes:
@@ -437,7 +463,7 @@ def read_file_bytes(path_or_filename: str, category: str = None) -> bytes:
     target_name = os.path.basename(clean_rel)
     bucket = "job_documents" if "job" in clean_rel.lower() else "Resume"
     try:
-        data = supabase.storage.from_(bucket).download(target_name)
+        data = supabase_admin.storage.from_(bucket).download(target_name)
         if data:
             return data
     except Exception:
