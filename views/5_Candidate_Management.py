@@ -1523,7 +1523,11 @@ with left_col:
                     )
 
                     if not resume_path:
-                        st.error("Resume upload failed. Candidate was not saved completely.")
+                        try:
+                            supabase.table("candidate_management").delete().eq("candidate_id", candidate["candidate_id"]).execute()
+                        except Exception:
+                            pass
+                        st.error("Resume upload failed. Candidate draft was removed to prevent incomplete records.")
                         st.stop()
 
                 (

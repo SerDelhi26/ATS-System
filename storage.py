@@ -2,10 +2,14 @@ import os
 import re
 import io
 import time
+import threading
+import logging
 import requests
 from dotenv import load_dotenv
 import streamlit as st
 from db import supabase
+
+logger = logging.getLogger("storage")
 
 try:
     import msal
@@ -33,40 +37,44 @@ MICROSOFT_CLIENT_SECRET = get_secret_val("MICROSOFT_CLIENT_SECRET", "")
 MICROSOFT_TENANT_ID = get_secret_val("MICROSOFT_TENANT_ID", "common")
 MICROSOFT_REFRESH_TOKEN = get_secret_val("MICROSOFT_REFRESH_TOKEN", "")
 
-# In-memory token cache to minimize network calls
+# In-memory token cache to minimize network calls (thread-safe)
 _cached_msal_token = None
 _cached_token_expiry = 0
+_token_lock = threading.Lock()
 
 def get_onedrive_access_token() -> str:
     """
     Returns a valid Microsoft Graph access token using the long-lived refresh token.
-    Caches the token in memory until 5 minutes before expiry.
+    Caches the token in memory until 5 minutes before expiry. Thread-safe for 20+ concurrent users.
     """
     global _cached_msal_token, _cached_token_expiry
     now = time.time()
-    if _cached_msal_token and now < _cached_token_expiry - 300:
-        return _cached_msal_token
-
-    if not msal or not MICROSOFT_REFRESH_TOKEN:
-        return None
-
-    try:
-        app = msal.ConfidentialClientApplication(
-            MICROSOFT_CLIENT_ID,
-            client_credential=MICROSOFT_CLIENT_SECRET,
-            authority=f"https://login.microsoftonline.com/{MICROSOFT_TENANT_ID}"
-        )
-        res = app.acquire_token_by_refresh_token(
-            MICROSOFT_REFRESH_TOKEN,
-            scopes=["Files.ReadWrite.All", "User.Read"]
-        )
-        if "access_token" in res:
-            _cached_msal_token = res["access_token"]
-            _cached_token_expiry = now + int(res.get("expires_in", 3600))
+    with _token_lock:
+        if _cached_msal_token and now < _cached_token_expiry - 300:
             return _cached_msal_token
-    except Exception:
-        pass
-    return None
+
+        if not msal or not MICROSOFT_REFRESH_TOKEN:
+            return None
+
+        try:
+            app = msal.ConfidentialClientApplication(
+                MICROSOFT_CLIENT_ID,
+                client_credential=MICROSOFT_CLIENT_SECRET,
+                authority=f"https://login.microsoftonline.com/{MICROSOFT_TENANT_ID}"
+            )
+            res = app.acquire_token_by_refresh_token(
+                MICROSOFT_REFRESH_TOKEN,
+                scopes=["Files.ReadWrite.All", "User.Read"]
+            )
+            if "access_token" in res:
+                _cached_msal_token = res["access_token"]
+                _cached_token_expiry = now + int(res.get("expires_in", 3600))
+                return _cached_msal_token
+            else:
+                logger.warning(f"OneDrive token refresh error: {res.get('error_description', res.get('error', 'Unknown'))}")
+        except Exception as e:
+            logger.warning(f"OneDrive token acquisition failed: {type(e).__name__}")
+        return None
 
 
 def _get_storage_base_dir() -> str:
@@ -210,8 +218,8 @@ def _download_from_onedrive_cloud(rel_path: str) -> bytes:
 
 def save_job_document(uploaded_file, category_name: str, sub_category_name: str, job_ref: str, custom_name: str = None) -> str:
     """
-    Saves a Job Document directly to Admin OneDrive Cloud (Apps/ATS_Storage) and local storage.
-    Enforces OneDrive-only storage (no secondary vendor upload).
+    Saves a Job Document to Admin OneDrive Cloud (Apps/ATS_Storage) and local storage.
+    Automatically falls back to Supabase Cloud Storage if OneDrive is unreachable.
     Returns the relative path for database storage.
     """
     if uploaded_file is None:
@@ -234,7 +242,22 @@ def save_job_document(uploaded_file, category_name: str, sub_category_name: str,
         # 1. Upload to Admin OneDrive Cloud at Apps/ATS_Storage (1 TB Storage) with retry
         onedrive_ok = _upload_to_onedrive_cloud(rel_path, file_bytes)
 
-        # 2. Save to Local Disk if writable
+        # 2. Cloud fallback: If OneDrive fails, store in Supabase Storage so file is accessible across all machines
+        supabase_ok = False
+        if not onedrive_ok:
+            try:
+                target_name = os.path.basename(rel_path)
+                supabase.storage.from_("job_documents").upload(
+                    path=target_name,
+                    file=file_bytes,
+                    file_options={"upsert": "true"}
+                )
+                supabase_ok = True
+                logger.info(f"Job document '{safe_name}' backed up to Supabase Storage.")
+            except Exception as se:
+                logger.warning(f"Supabase Storage backup failed: {se}")
+
+        # 3. Save to Local Disk if writable
         local_saved = False
         try:
             abs_path = os.path.join(dirs["job_documents_dir"], safe_name)
@@ -247,12 +270,14 @@ def save_job_document(uploaded_file, category_name: str, sub_category_name: str,
         except Exception:
             pass
 
-        # 3. Verify upload success — never fail silently
-        if not onedrive_ok and not local_saved:
-            st.error(f"❌ Failed to save Job Document '{safe_name}' to OneDrive cloud. Please check OneDrive connectivity.")
+        # 4. Verify upload success — never fail silently
+        if not onedrive_ok and not supabase_ok and not local_saved:
+            st.error(f"❌ Failed to save Job Document '{safe_name}' to cloud or local storage. Please check connectivity.")
             return None
-        elif not onedrive_ok:
-            st.warning(f"⚠️ Job Document '{safe_name}' saved locally, but OneDrive cloud sync failed.")
+        elif not onedrive_ok and not supabase_ok:
+            st.warning(f"⚠️ Job Document '{safe_name}' saved locally, but cloud sync failed.")
+        elif not onedrive_ok and supabase_ok:
+            st.info(f"ℹ️ Job Document '{safe_name}' backed up to Supabase Cloud (OneDrive sync pending).")
 
         return rel_path
 
@@ -263,8 +288,8 @@ def save_job_document(uploaded_file, category_name: str, sub_category_name: str,
 
 def save_candidate_resume(uploaded_file, category_name: str, sub_category_name: str, job_ref: str, custom_name: str = None) -> str:
     """
-    Saves a Candidate Resume directly to Admin OneDrive Cloud (Apps/ATS_Storage) and local storage.
-    Enforces OneDrive-only storage (no secondary vendor upload).
+    Saves a Candidate Resume to Admin OneDrive Cloud (Apps/ATS_Storage) and local storage.
+    Automatically falls back to Supabase Cloud Storage if OneDrive is unreachable.
     Returns the relative path for database storage.
     """
     if uploaded_file is None:
@@ -287,7 +312,22 @@ def save_candidate_resume(uploaded_file, category_name: str, sub_category_name: 
         # 1. Upload to Admin OneDrive Cloud at Apps/ATS_Storage (1 TB Storage) with retry
         onedrive_ok = _upload_to_onedrive_cloud(rel_path, file_bytes)
 
-        # 2. Save to Local Disk if writable
+        # 2. Cloud fallback: If OneDrive fails, store in Supabase Storage so file is accessible across all machines
+        supabase_ok = False
+        if not onedrive_ok:
+            try:
+                target_name = os.path.basename(rel_path)
+                supabase.storage.from_("Resume").upload(
+                    path=target_name,
+                    file=file_bytes,
+                    file_options={"upsert": "true"}
+                )
+                supabase_ok = True
+                logger.info(f"Resume '{safe_name}' backed up to Supabase Storage.")
+            except Exception as se:
+                logger.warning(f"Supabase Storage backup failed: {se}")
+
+        # 3. Save to Local Disk if writable
         local_saved = False
         try:
             abs_path = os.path.join(dirs["resumes_dir"], safe_name)
@@ -300,12 +340,14 @@ def save_candidate_resume(uploaded_file, category_name: str, sub_category_name: 
         except Exception:
             pass
 
-        # 3. Verify upload success — never fail silently
-        if not onedrive_ok and not local_saved:
-            st.error(f"❌ Failed to save Resume '{safe_name}' to OneDrive cloud. Please check OneDrive connectivity.")
+        # 4. Verify upload success — never fail silently
+        if not onedrive_ok and not supabase_ok and not local_saved:
+            st.error(f"❌ Failed to save Resume '{safe_name}' to cloud or local storage. Please check connectivity.")
             return None
-        elif not onedrive_ok:
-            st.warning(f"⚠️ Resume '{safe_name}' saved locally, but OneDrive cloud sync failed.")
+        elif not onedrive_ok and not supabase_ok:
+            st.warning(f"⚠️ Resume '{safe_name}' saved locally, but cloud sync failed.")
+        elif not onedrive_ok and supabase_ok:
+            st.info(f"ℹ️ Resume '{safe_name}' backed up to Supabase Cloud (OneDrive sync pending).")
 
         return rel_path
 
