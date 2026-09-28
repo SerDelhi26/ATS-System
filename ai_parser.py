@@ -149,13 +149,75 @@ def get_ordered_key_pool(keys: list[str], provider: str) -> list[tuple[int, str]
     return active_keys + cooling_keys
 
 
+def extract_phone_numbers(text: str) -> list[str]:
+    """
+    Extracts all distinct valid 10-digit mobile numbers from text or phone string.
+    Handles international codes (+91, 0091), spaces, dashes, slashes, and combined lists.
+    """
+    if not text:
+        return []
+    
+    found = []
+    # Split text by common multi-number delimiters
+    chunks = re.split(r'[/,;|\\n\r]|(?:\s+or\s+)|\band\b|&', str(text))
+    for c in chunks:
+        # Strip country code (+91, 91, 0)
+        c_clean = re.sub(r'^\s*(\+?91[\s\-]*)?|^0', '', c.strip())
+        digits = re.sub(r'\D', '', c_clean)
+        if len(digits) >= 10:
+            p = digits[-10:]
+            if p not in found:
+                found.append(p)
+                
+    # If chunks didn't extract at least 2 numbers, scan globally across text
+    if len(found) < 2:
+        raw_matches = re.findall(r'(?:(?:\+?91[\s\-]*)?|(?:\b0))?([6-9]\d{4}[\s\-]?\d{5}|[6-9]\d{2}[\s\-]?\d{3}[\s\-]?\d{4}|[6-9]\d{9})\b', str(text))
+        for m in raw_matches:
+            digits = re.sub(r'\D', '', m)
+            if len(digits) >= 10:
+                p = digits[-10:]
+                if p not in found:
+                    found.append(p)
+    return found
+
+
 def clean_phone(phone_str: str) -> str:
-    """Extracts the last 10 digits from a phone string."""
-    if not phone_str:
+    """Extracts the first valid 10-digit mobile number from a phone string."""
+    phones = extract_phone_numbers(phone_str)
+    return phones[0] if phones else ""
+
+
+def extract_emails(text: str) -> list[str]:
+    """Extracts valid email addresses from text."""
+    if not text:
+        return []
+    pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,7}\b'
+    matches = re.findall(pattern, str(text))
+    valid = []
+    for m in matches:
+        e = m.strip().strip('.').lower()
+        if e and not e.endswith(('.png', '.jpg', '.jpeg', '.gif', '.pdf', '.webp')) and e not in valid:
+            valid.append(e)
+    return valid
+
+
+def find_company_fallback(text: str) -> str:
+    """Extracts company name from text using robust heuristic patterns."""
+    if not text:
         return ""
-    cleaned = re.sub(r'\.0+$', '', str(phone_str).strip())
-    digits = re.sub(r'\D', '', cleaned)
-    return digits[-10:] if len(digits) >= 10 else digits
+    patterns = [
+        r'(?:Current\s+(?:Company|Organization|Employer)|Present\s+(?:Company|Employer|Organization)|Company(?:\s+Name)?|Current\s+Employer|Organization|Employer|Firm)\s*[:\-\–]\s*([A-Za-z0-9&.,\s\'\-]{3,60})',
+        r'Working (?:at|with)\s+([A-Za-z0-9&.,\s\'\-]{3,60}?)(?:\s+as\s+|\s*[,|\n])',
+        r'(?:WORK EXPERIENCE|EXPERIENCE|EMPLOYMENT HISTORY)\s*[:\n]\s*([A-Za-z0-9&.,\s\'\-]{3,60}?)(?:\s*[|\-\–]\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|\d{4}|Present|Till)|\n)',
+    ]
+    for p in patterns:
+        m = re.search(p, text, re.IGNORECASE)
+        if m:
+            val = m.group(1).split('\n')[0].strip(' ,-–|:')
+            val = re.sub(r'^(?:is|at|in|with|for)\s+', '', val, flags=re.I).strip()
+            if len(val) >= 3 and not re.match(r'^(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Present|Till|Date|Experience|Education|Profile|Summary|Details)$', val, re.I):
+                return val
+    return ""
 
 
 def extract_text_from_pdf(file_bytes: bytes) -> str:
@@ -281,28 +343,82 @@ def compute_approx_age(parsed: dict) -> int:
         return 25
 
 
-def sanitize_parsed_output(parsed: dict) -> dict:
-    """Sanitizes and normalizes extracted fields. Notice period, notice negotiable, and remarks are excluded."""
+def sanitize_parsed_output(parsed: dict, raw_text: str = "") -> dict:
+    """Sanitizes and normalizes extracted fields with fallback recovery from raw text."""
     raw_gender = str(parsed.get("gender", "")).strip().capitalize()
     if raw_gender not in ["Male", "Female", "Other"]:
         raw_gender = "Not Specified"
 
     approx_dob = compute_approx_dob(parsed)
 
+    # 1. Clean & enrich Email
+    email = str(parsed.get("email", "")).strip().lower()
+    email = re.sub(r'^(?:mailto:|email:\s*|e-mail:\s*)', '', email).strip()
+    if not email or "@" not in email:
+        raw_emails = extract_emails(raw_text)
+        if raw_emails:
+            email = raw_emails[0]
+
+    # 2. Clean & enrich Mobile & Alternate Mobile
+    raw_mobile = str(parsed.get("mobile_no", "")).strip()
+    raw_alt = str(parsed.get("alternate_mobile", "")).strip()
+
+    extracted_from_mobile = extract_phone_numbers(raw_mobile)
+    extracted_from_alt = extract_phone_numbers(raw_alt)
+
+    mobile_no = ""
+    alternate_mobile = ""
+
+    if extracted_from_mobile:
+        mobile_no = extracted_from_mobile[0]
+        if len(extracted_from_mobile) > 1:
+            alternate_mobile = extracted_from_mobile[1]
+
+    if not alternate_mobile and extracted_from_alt:
+        alt_candidate = extracted_from_alt[0]
+        if alt_candidate != mobile_no:
+            alternate_mobile = alt_candidate
+        elif len(extracted_from_alt) > 1:
+            alternate_mobile = extracted_from_alt[1]
+
+    # If alternate_mobile is still empty, scan raw resume text for any secondary number
+    if not alternate_mobile and raw_text:
+        text_phones = extract_phone_numbers(raw_text)
+        for tp in text_phones:
+            if tp != mobile_no:
+                alternate_mobile = tp
+                break
+
+    # If mobile_no was empty but alternate exists, promote it
+    if not mobile_no and alternate_mobile:
+        mobile_no = alternate_mobile
+        alternate_mobile = ""
+
+    # 3. Clean & enrich Current Company
+    company = str(parsed.get("current_company", "")).strip()
+    company = re.sub(r'^(?:Current (?:Company|Organization)|Present (?:Company|Employer)|Company Name|Organization|Employer|Working at|Working with)\s*[:\-\–]\s*', '', company, flags=re.I).strip()
+    if company.lower() in ["none", "null", "n/a", "not specified", "nil", "0", "-", "na"]:
+        company = ""
+
+    if not company and raw_text:
+        fallback_comp = find_company_fallback(raw_text)
+        if fallback_comp:
+            company = fallback_comp
+
     return {
         "first_name": str(parsed.get("first_name", "")).strip(),
         "last_name": str(parsed.get("last_name", "")).strip(),
         "gender": raw_gender,
         "approx_dob": approx_dob,
-        "email": str(parsed.get("email", "")).strip().lower(),
-        "mobile_no": clean_phone(parsed.get("mobile_no", "")),
-        "alternate_mobile": clean_phone(parsed.get("alternate_mobile", "")),
+        "email": email,
+        "mobile_no": mobile_no,
+        "alternate_mobile": alternate_mobile,
         "current_location": str(parsed.get("current_location", "")).strip(),
         "experience_years": max(0, min(40, int(parsed.get("experience_years", 0) or 0))),
         "experience_months": max(0, min(11, int(parsed.get("experience_months", 0) or 0))),
         "qualification": str(parsed.get("qualification", "")).strip(),
         "education_details": str(parsed.get("education_details", "")).strip(),
-        "current_company": str(parsed.get("current_company", "")).strip(),
+        "current_company": company,
         "current_designation": str(parsed.get("current_designation", "")).strip(),
         "current_ctc": float(parsed.get("current_ctc", 0.0) or 0.0),
         "expected_ctc": float(parsed.get("expected_ctc", 0.0) or 0.0),
@@ -310,7 +426,7 @@ def sanitize_parsed_output(parsed: dict) -> dict:
     }
 
 
-def _call_gemini_api(api_key: str, model: str, payload: dict, timeout: int = 15) -> tuple[bool, dict, str]:
+def _call_gemini_api(api_key: str, model: str, payload: dict, timeout: int = 15, resume_text: str = "") -> tuple[bool, dict, str]:
     """Makes a single call to the Google Gemini generateContent API with tight timeout."""
     endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
     headers = {"Content-Type": "application/json"}
@@ -339,7 +455,7 @@ def _call_gemini_api(api_key: str, model: str, payload: dict, timeout: int = 15)
             raw_text = raw_text[:-3]
 
         parsed = json.loads(raw_text.strip())
-        return True, sanitize_parsed_output(parsed), "Success"
+        return True, sanitize_parsed_output(parsed, raw_text=resume_text), "Success"
     except requests.exceptions.Timeout:
         return False, {}, "TIMEOUT"
     except Exception as e:
@@ -481,7 +597,10 @@ Important Rules:
 4. Determine gender accurately from salutations (Mr. -> Male, Ms./Mrs. -> Female) or resume personal section. If unknown, set "Not Specified".
 5. Calculate total professional experience accurately in full years (integer) and remaining months (0-11 integer).
 6. If CTC is not explicitly stated, return 0.0.
-7. Output valid JSON only.
+7. Extract Email accurately: Thoroughly search the header, contact info, personal details, or biodata for the candidate's email address (e.g. name@domain.com). Do not leave empty if an email exists.
+8. Extract Phone & Alternate Mobile accurately: Extract primary mobile number into 'mobile_no'. If a second phone, WhatsApp number, residence telephone, or alternate number is present (or if multiple numbers are separated by '/', ',', or '&'), extract the second number into 'alternate_mobile'. Return exactly 10 digits without country code or leading 0.
+9. Extract Current Company accurately: Look at the top-most or most recent position in Experience / Employment / Career History / Work History / Projects. Look for keywords like 'Present', 'Till Date', 'Current', 'Organization:', 'Company:', 'Employer:', 'Working at/with'. If not currently working, provide their most recent past employer name. Never leave 'current_company' empty if any company/organization is mentioned in work history. Return only the clean company name.
+10. Output valid JSON only.
 """
 
     ext = os.path.splitext(filename or "")[1].lower()
@@ -596,7 +715,7 @@ Important Rules:
                 if rem_timeout < 2 or total_attempts >= MAX_TOTAL_ATTEMPTS:
                     break
                 total_attempts += 1
-                success, data, msg = _call_gemini_api(key, model, gemini_payload, timeout=rem_timeout)
+                success, data, msg = _call_gemini_api(key, model, gemini_payload, timeout=rem_timeout, resume_text=extracted_text)
                 if success:
                     return True, data, f"Resume parsed successfully via Gemini AI (Key #{idx})!"
                 if msg in ["RATE_LIMIT_429", "SERVICE_UNAVAILABLE_503"]:
