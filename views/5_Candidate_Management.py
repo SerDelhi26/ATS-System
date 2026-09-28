@@ -898,16 +898,16 @@ with left_col:
         existing = st.session_state.pending_duplicate
         dup_type = st.session_state.pending_duplicate_type
 
-        existing_job_id = existing["job_id"]
-        existing_job = job_display_lookup.get(existing_job_id, "Unknown Job")
+        existing_job_id = existing.get("job_id")
+        existing_job = job_display_lookup.get(existing_job_id, "Archive / Unassigned") if existing_job_id else "Archive / Unassigned"
 
-        existing_company_id = next((j["company_id"] for j in all_jobs if j["job_id"] == existing_job_id), None)
-        existing_company_name = company_lookup.get(existing_company_id, "Unknown Company") if existing_company_id else "Unknown Company"
+        existing_company_id = next((j["company_id"] for j in all_jobs if j["job_id"] == existing_job_id), None) if existing_job_id else None
+        existing_company_name = company_lookup.get(existing_company_id, existing.get("current_company") or "Historical Client") if existing_company_id else (existing.get("current_company") or "Historical Client")
 
         if dup_type == "SAME_JOB":
             st.error(f"🚨 **Exact Duplicate Blocked:** {existing['first_name']} {existing['last_name']} has already applied for this exact job (**{existing_job}**). Direct duplicate applications for the same job are restricted.")
             with st.container(border=True):
-                st.markdown(f"**Existing Candidate:** `{existing['candidate_reference_no']}` | **Current Stage:** `{existing.get('current_stage', 'Unknown')}` | **Added By:** `{existing.get('created_by_name', 'Unknown')}`")
+                st.markdown(f"**Existing Candidate:** `{existing.get('candidate_reference_no', 'N/A')}` | **Current Stage:** `{existing.get('current_stage', 'Unknown')}` | **Added By:** `{existing.get('created_by_name', 'Unknown')}`")
                 col1, col2 = st.columns(2)
                 if col1.button("👁️ View / Edit Existing Application", use_container_width=True):
                     st.session_state.edit_candidate_id = existing["candidate_id"]
@@ -923,7 +923,7 @@ with left_col:
             past_date_str = str(existing.get('created_on') or existing.get('created_at', ''))[:10]
             st.warning(f"⚠️ **Same Company Soft-Lock:** Candidate previously applied to **{existing_company_name}** on **{past_date_str}** for Job **{existing_job}** (Stage: **{existing.get('current_stage', 'Unknown')}**).")
             with st.container(border=True):
-                st.markdown(f"**Previous Record:** `{existing['candidate_reference_no']}` — {existing['first_name']} {existing['last_name']} ({existing.get('current_designation', '')})")
+                st.markdown(f"**Previous Record:** `{existing.get('candidate_reference_no', 'N/A')}` — {existing['first_name']} {existing['last_name']} ({existing.get('current_designation', '')})")
                 soft_lock_confirm = st.checkbox("☑️ I confirm management has approved considering this candidate for this new role at the same company.", value=False, key="soft_lock_confirm")
                 
                 col1, col2, col3 = st.columns([0.4, 0.3, 0.3])
@@ -937,6 +937,31 @@ with left_col:
                     st.session_state.edit_candidate_id = existing["candidate_id"]
                     st.session_state.pending_duplicate = None
                     st.session_state.pending_duplicate_type = None
+                    st.rerun()
+                if col3.button("❌ Cancel", use_container_width=True):
+                    st.session_state.pending_duplicate = None
+                    st.session_state.pending_duplicate_type = None
+                    st.rerun()
+
+        elif dup_type == "LEGACY_ARCHIVE":
+            ref_no = existing.get('candidate_reference_no') or f"LEG_{existing.get('legacy_candidate_id', '')}"
+            cand_name = f"{existing.get('first_name', '')} {existing.get('last_name', '')}".strip()
+            st.info(f"🏛️ **Legacy Archive Profile Found:** Candidate `{cand_name}` already exists in your historical archive (**{ref_no}**).")
+            with st.container(border=True):
+                st.markdown(f"**Archive Record:** `{ref_no}` — `{cand_name}` ({existing.get('current_designation', '')} @ {existing.get('current_company', '')})")
+                col1, col2, col3 = st.columns([0.4, 0.3, 0.3])
+                if col1.button("📋 Auto-Fill Form from Archive", use_container_width=True):
+                    st.session_state.parsed_candidate_data = existing
+                    st.session_state.candidate_form_reset += 1
+                    st.session_state.pending_duplicate = None
+                    st.session_state.pending_duplicate_type = None
+                    st.success("Archive candidate details loaded into form!")
+                    st.rerun()
+                if col2.button("✅ Import & Save to Current Job", use_container_width=True):
+                    st.session_state.duplicate_override = True
+                    st.session_state.pending_duplicate = None
+                    st.session_state.pending_duplicate_type = None
+                    st.session_state.trigger_save = True
                     st.rerun()
                 if col3.button("❌ Cancel", use_container_width=True):
                     st.session_state.pending_duplicate = None
@@ -1242,65 +1267,80 @@ with left_col:
 
             # Build dynamic OR conditions
             or_conditions = []
-            
             if norm_email:
-                or_conditions.append(f"email.eq.{norm_email}")
-                
+                or_conditions.append(f"email.ilike.{norm_email}")
             if norm_mobile:
-                or_conditions.append(f"mobile_no.eq.{norm_mobile}")
-                or_conditions.append(f"alternate_mobile.eq.{norm_mobile}")
-                
+                or_conditions.append(f"mobile_no.ilike.%{norm_mobile}%")
+                or_conditions.append(f"alternate_mobile.ilike.%{norm_mobile}%")
             if norm_alt:
-                or_conditions.append(f"mobile_no.eq.{norm_alt}")
-                or_conditions.append(f"alternate_mobile.eq.{norm_alt}")
-                
+                or_conditions.append(f"mobile_no.ilike.%{norm_alt}%")
+                or_conditions.append(f"alternate_mobile.ilike.%{norm_alt}%")
             if norm_first and norm_last:
                 or_conditions.append(f"and(first_name.ilike.{norm_first},last_name.ilike.{norm_last})")
 
-            or_string = ",".join(or_conditions)
-
-            duplicates = (
-                supabase
-                .table(
-                    "candidate_management"
-                )
-                .select("*") 
-                .or_(
-                    or_string
-                )
-                .execute()
-            )
+            duplicates_data = []
+            if or_conditions:
+                try:
+                    res_active = (
+                        supabase
+                        .table("candidate_management")
+                        .select("*") 
+                        .or_(",".join(or_conditions))
+                        .execute()
+                    )
+                    duplicates_data = res_active.data or []
+                except Exception:
+                    duplicates_data = []
 
             # Ignore self during edit
-            if editing:
-
-                duplicates.data = [
-
-                    item
-
-                    for item in duplicates.data
-
-                    if item["candidate_id"]
-                    != candidate["candidate_id"]
-
+            if editing and duplicates_data:
+                duplicates_data = [
+                    item for item in duplicates_data
+                    if item["candidate_id"] != candidate["candidate_id"]
                 ]
 
+            # Query legacy archive candidates
+            leg_or_conditions = []
+            if norm_email:
+                leg_or_conditions.append(f"email.ilike.{norm_email}")
+            if norm_mobile:
+                leg_or_conditions.append(f"mobile_no.ilike.%{norm_mobile}%")
+            if norm_alt:
+                leg_or_conditions.append(f"mobile_no.ilike.%{norm_alt}%")
+            if norm_first and norm_last:
+                leg_or_conditions.append(f"and(first_name.ilike.{norm_first},last_name.ilike.{norm_last})")
 
-            if duplicates.data and not st.session_state.duplicate_override:
-                
+            legacy_duplicates = []
+            if leg_or_conditions:
+                try:
+                    res_legacy = (
+                        supabase
+                        .table("legacy_candidates")
+                        .select("*")
+                        .or_(",".join(leg_or_conditions))
+                        .execute()
+                    )
+                    legacy_duplicates = [
+                        c for c in (res_legacy.data or [])
+                        if not c.get("is_migrated_to_active")
+                    ]
+                except Exception:
+                    legacy_duplicates = []
+
+            if (duplicates_data or legacy_duplicates) and not st.session_state.duplicate_override:
                 highest_priority_dup = None
                 dup_type = None
-                priority_map = {"SAME_JOB": 4, "SAME_COMPANY": 3, "GLOBAL": 2, "NAME_MATCH": 1, None: 0}
-                
-                for d in duplicates.data:
+                priority_map = {"SAME_JOB": 5, "SAME_COMPANY": 4, "GLOBAL": 3, "LEGACY_ARCHIVE": 2, "NAME_MATCH": 1, None: 0}
+
+                for d in duplicates_data:
                     d_email = (d.get("email") or "").strip().lower()
                     d_mobile = normalize_phone(d.get("mobile_no"))
                     d_alt = normalize_phone(d.get("alternate_mobile"))
                     d_first = (d.get("first_name") or "").strip().lower()
                     d_last = (d.get("last_name") or "").strip().lower()
-                    
-                    d_job_id = d["job_id"]
-                    d_company_id = next((j["company_id"] for j in all_jobs if j["job_id"] == d_job_id), None)
+
+                    d_job_id = d.get("job_id")
+                    d_company_id = next((j["company_id"] for j in all_jobs if j["job_id"] == d_job_id), None) if d_job_id else None
 
                     # Cooling-Off Period Logic (180 Days)
                     days_old = 0
@@ -1310,15 +1350,18 @@ with left_col:
                             clean_time = created_at_str.split(".")[0].split("+")[0].replace("Z", "")
                             created_at_date = datetime.strptime(clean_time, "%Y-%m-%dT%H:%M:%S")
                             days_old = (datetime.now() - created_at_date).days
-                        except:
+                        except Exception:
                             pass
-                    
+
                     # Determine Match Criteria
                     is_contact_match = False
-                    if norm_email and norm_email == d_email: is_contact_match = True
-                    if norm_mobile and norm_mobile in [d_mobile, d_alt]: is_contact_match = True
-                    if norm_alt and norm_alt in [d_mobile, d_alt]: is_contact_match = True
-                    
+                    if norm_email and norm_email == d_email:
+                        is_contact_match = True
+                    if norm_mobile and norm_mobile in [d_mobile, d_alt]:
+                        is_contact_match = True
+                    if norm_alt and norm_alt in [d_mobile, d_alt]:
+                        is_contact_match = True
+
                     current_dup_type = None
                     if is_contact_match:
                         if d_job_id == selected_job_id:
@@ -1327,18 +1370,41 @@ with left_col:
                             current_dup_type = "SAME_COMPANY"
                         else:
                             current_dup_type = "GLOBAL"
-                    elif norm_first == d_first and norm_last == d_last and norm_first != "":
+                    elif norm_first and norm_last and norm_first == d_first and norm_last == d_last and norm_first != "":
                         current_dup_type = "NAME_MATCH"
 
                     # Apply Cooling Off Period for non-job matches
                     if current_dup_type in ["SAME_COMPANY", "GLOBAL", "NAME_MATCH"] and days_old > 180:
                         current_dup_type = None
-                        
+
                     # Apply highest threat level
                     if current_dup_type and priority_map[current_dup_type] > priority_map[dup_type]:
                         dup_type = current_dup_type
                         highest_priority_dup = d
-                        
+
+                # Check legacy matches if no higher active match found
+                if not highest_priority_dup and legacy_duplicates:
+                    for ld in legacy_duplicates:
+                        ld_email = (ld.get("email") or "").strip().lower()
+                        ld_mobile = normalize_phone(ld.get("mobile_no"))
+                        ld_first = (ld.get("first_name") or "").strip().lower()
+                        ld_last = (ld.get("last_name") or "").strip().lower()
+
+                        is_match = False
+                        if norm_email and norm_email == ld_email:
+                            is_match = True
+                        if norm_mobile and norm_mobile == ld_mobile:
+                            is_match = True
+                        if norm_alt and norm_alt == ld_mobile:
+                            is_match = True
+                        if norm_first and norm_last and norm_first == ld_first and norm_last == ld_last and norm_first != "":
+                            is_match = True
+
+                        if is_match:
+                            dup_type = "LEGACY_ARCHIVE"
+                            highest_priority_dup = ld
+                            break
+
                 if highest_priority_dup:
                     st.session_state.pending_duplicate = highest_priority_dup
                     st.session_state.pending_duplicate_type = dup_type
