@@ -436,7 +436,7 @@ def _call_openrouter_api(api_key: str, model: str, system_prompt: str, resume_te
 def parse_resume_with_ai(file_bytes: bytes, filename: str, mime_type: str = None) -> tuple[bool, dict, str]:
     """
     Parses a candidate resume with Multi-Key & Multi-Provider load balancing and failover:
-    Gemini Key Pool -> Groq Key Pool -> OpenRouter Key Pool.
+    Groq Key Pool (Priority 1) -> Gemini Key Pool (Priority 2) -> OpenRouter Key Pool (Priority 3).
     """
     if not file_bytes:
         return False, {}, "No file content provided."
@@ -531,45 +531,7 @@ Important Rules:
         return max(1.0, MAX_OVERALL_BUDGET - (time.time() - start_time))
 
     # -------------------------------------------------------------
-    # 1. Try Gemini Key Pool & Models (ALL configured keys in round-robin order)
-    # -------------------------------------------------------------
-    env_gemini_model = (os.getenv("GEMINI_MODEL") or "").strip()
-    if not env_gemini_model:
-        try:
-            env_gemini_model = str(st.secrets.get("GEMINI_MODEL", "")).strip()
-        except Exception:
-            pass
-
-    gemini_models = ["gemini-flash-lite-latest", "gemini-3.6-flash", "gemini-flash-latest"]
-    if env_gemini_model:
-        if env_gemini_model in gemini_models:
-            gemini_models.remove(env_gemini_model)
-        gemini_models.insert(0, env_gemini_model)
-
-    gemini_key_pool = get_ordered_key_pool(gemini_keys, "gemini")
-
-    for idx, key in gemini_key_pool:
-        if time_left() <= 2.0 or total_attempts >= MAX_TOTAL_ATTEMPTS:
-            break
-        # Try primary model first, fallback to next if 503 or 404
-        for model in gemini_models[:2]:
-            rem_timeout = min(10, int(time_left()))
-            if rem_timeout < 2 or total_attempts >= MAX_TOTAL_ATTEMPTS:
-                break
-            total_attempts += 1
-            success, data, msg = _call_gemini_api(key, model, gemini_payload, timeout=rem_timeout)
-            if success:
-                return True, data, f"Resume parsed successfully via Gemini AI (Key #{idx})!"
-            if msg in ["RATE_LIMIT_429", "SERVICE_UNAVAILABLE_503"]:
-                errors.append(f"Gemini Key #{idx} rate-limited.")
-                break  # Failover immediately to next Gemini key in the pool!
-            elif "404" in msg:
-                continue  # Model not found, try fallback model for this key
-            else:
-                errors.append(f"Gemini Key #{idx} ({model}): {msg}")
-
-    # -------------------------------------------------------------
-    # 2. Try Groq Key Pool (if Gemini failed, within budget & attempt cap)
+    # 1. PRIORITY 1: Groq Key Pool (ALL 4 keys in round-robin order)
     # -------------------------------------------------------------
     if groq_keys and extracted_text and time_left() > 2.0 and total_attempts < MAX_TOTAL_ATTEMPTS:
         env_groq_model = (os.getenv("GROQ_MODEL") or "").strip()
@@ -600,14 +562,53 @@ Important Rules:
                     return True, data, f"Resume parsed successfully via Groq AI (Key #{idx})!"
                 if msg in ["RATE_LIMIT_429", "SERVICE_UNAVAILABLE_503"]:
                     errors.append(f"Groq Key #{idx} rate-limited.")
-                    break  # Failover to next Groq key
+                    break  # Failover immediately to next Groq key in pool
                 elif "404" in msg:
-                    continue
+                    continue  # Try next model
                 else:
                     errors.append(f"Groq Key #{idx} ({model}): {msg}")
 
     # -------------------------------------------------------------
-    # 3. Try OpenRouter Key Pool (if Gemini & Groq failed, within budget)
+    # 2. PRIORITY 2: Gemini Key Pool (ALL 4 keys - if Groq failed or non-text PDF)
+    # -------------------------------------------------------------
+    if gemini_keys and time_left() > 2.0 and total_attempts < MAX_TOTAL_ATTEMPTS:
+        env_gemini_model = (os.getenv("GEMINI_MODEL") or "").strip()
+        if not env_gemini_model:
+            try:
+                env_gemini_model = str(st.secrets.get("GEMINI_MODEL", "")).strip()
+            except Exception:
+                pass
+
+        gemini_models = ["gemini-flash-lite-latest", "gemini-3.6-flash", "gemini-flash-latest"]
+        if env_gemini_model:
+            if env_gemini_model in gemini_models:
+                gemini_models.remove(env_gemini_model)
+            gemini_models.insert(0, env_gemini_model)
+
+        gemini_key_pool = get_ordered_key_pool(gemini_keys, "gemini")
+
+        for idx, key in gemini_key_pool:
+            if time_left() <= 2.0 or total_attempts >= MAX_TOTAL_ATTEMPTS:
+                break
+            # Try primary model first, fallback to next if 503 or 404
+            for model in gemini_models[:2]:
+                rem_timeout = min(10, int(time_left()))
+                if rem_timeout < 2 or total_attempts >= MAX_TOTAL_ATTEMPTS:
+                    break
+                total_attempts += 1
+                success, data, msg = _call_gemini_api(key, model, gemini_payload, timeout=rem_timeout)
+                if success:
+                    return True, data, f"Resume parsed successfully via Gemini AI (Key #{idx})!"
+                if msg in ["RATE_LIMIT_429", "SERVICE_UNAVAILABLE_503"]:
+                    errors.append(f"Gemini Key #{idx} rate-limited.")
+                    break  # Failover immediately to next Gemini key in pool
+                elif "404" in msg:
+                    continue  # Model not found, try fallback model
+                else:
+                    errors.append(f"Gemini Key #{idx} ({model}): {msg}")
+
+    # -------------------------------------------------------------
+    # 3. PRIORITY 3: OpenRouter Key Pool (ALL 4 keys - if Groq & Gemini both failed)
     # -------------------------------------------------------------
     if openrouter_keys and extracted_text and time_left() > 2.0 and total_attempts < MAX_TOTAL_ATTEMPTS:
         openrouter_models = [
