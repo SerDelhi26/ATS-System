@@ -25,6 +25,31 @@ def apply_theme():
         display: none !important;
     }
 
+    /* Hide the entire Streamlit top-right toolbar
+       (Share, Star, Edit/Pencil, GitHub, three-dot menu) */
+    [data-testid="stToolbar"],
+    [data-testid="stToolbarActions"],
+    [data-testid="stDecoration"],
+    .stAppDeployButton,
+    [data-testid="stAppDeployButton"] {
+        display: none !important;
+        visibility: hidden !important;
+        height: 0 !important;
+        overflow: hidden !important;
+    }
+
+    /* Make the top header bar transparent so it doesn't take visual space */
+    header[data-testid="stHeader"] {
+        background: transparent !important;
+        pointer-events: none !important;
+    }
+
+    /* Hide Streamlit main hamburger / three-dot menu */
+    #MainMenu {
+        display: none !important;
+        visibility: hidden !important;
+    }
+
     /* Suppress Streamlit's transient missing submit button warning in forms */
     div[data-testid="stForm"] .stAlert,
     div[data-testid="stForm"] div:has(> [data-testid="stAlert"]),
