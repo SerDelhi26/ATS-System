@@ -61,7 +61,10 @@ if st.session_state.get(
 
     st.stop()
 
-is_developer = st.session_state.get("user_role") == "Developer"
+current_user_role = st.session_state.get("user_role", "")
+is_developer = current_user_role == "Developer"
+is_admin = current_user_role == "Admin"
+is_admin_lite = current_user_role == "Admin-Lite"
    
 st.set_page_config(
     page_title="ATS System",
@@ -95,7 +98,7 @@ st.markdown(
 
 if st.session_state.get("reset_user_id"):
 
-    # Security check: Admins cannot reset Developer passwords
+    # Security check: Privilege escalation prevention
     target_pwd_user = (
         supabase.table("users")
         .select("role")
@@ -103,9 +106,14 @@ if st.session_state.get("reset_user_id"):
         .execute()
         .data
     )
-    if target_pwd_user and target_pwd_user[0].get("role") == "Developer" and not is_developer:
+    target_pwd_role = target_pwd_user[0].get("role") if target_pwd_user else ""
+    if target_pwd_role == "Developer" and not is_developer:
         st.session_state.reset_user_id = None
         st.error("⛔ Unauthorized: Only a Developer can reset passwords for Developer accounts.")
+        st.stop()
+    if target_pwd_role in ["Admin", "Developer"] and is_admin_lite:
+        st.session_state.reset_user_id = None
+        st.error("⛔ Unauthorized: Admin-Lite cannot reset passwords for Admin or Developer accounts.")
         st.stop()
 
     with st.expander(
@@ -204,9 +212,14 @@ if st.session_state.edit_user_id:
     if response.data:
 
         target_user = response.data[0]
-        if target_user.get("role") == "Developer" and not is_developer:
+        target_role = target_user.get("role")
+        if target_role == "Developer" and not is_developer:
             st.session_state.edit_user_id = None
             st.error("⛔ Unauthorized: Only a Developer can modify a Developer account.")
+            st.rerun()
+        elif target_role in ["Admin", "Developer"] and is_admin_lite:
+            st.session_state.edit_user_id = None
+            st.error("⛔ Unauthorized: Admin-Lite cannot modify Admin or Developer accounts.")
             st.rerun()
         else:
             editing = True
@@ -251,18 +264,20 @@ with left_col:
 
         password = st.text_input(
             "Password",
-            value=(
-                user.get("password_hash", "")
-                if editing
-                else ""
-            ),
-            type="password"
+            value="",
+            type="password",
+            help="Leave blank to keep existing password" if editing else "Enter a strong password (min 8 chars, letters and numbers)",
+            placeholder="•••••••• (leave blank to keep current password)" if editing else ""
         )
 
         if is_developer:
             role_options = ["Recruiter", "Admin-Lite", "Admin", "Developer"]
-        else:
+        elif is_admin:
             role_options = ["Recruiter", "Admin-Lite", "Admin"]
+        else:
+            role_options = ["Recruiter", "Admin-Lite"]
+
+        is_self_edit = editing and user.get("user_id") == st.session_state.get("user_id")
 
         if editing and user.get("role") in role_options:
             default_role_idx = role_options.index(user["role"])
@@ -271,9 +286,13 @@ with left_col:
 
         role = st.selectbox(
             "Role",
-            role_options,
-            index=default_role_idx
+            role_options if not is_self_edit else [user.get("role")],
+            index=default_role_idx if not is_self_edit else 0,
+            disabled=is_self_edit,
+            help="You cannot alter your own administrative role." if is_self_edit else None
         )
+        if is_self_edit:
+            role = user.get("role")
 
         joining_date = st.date_input(
             "Joining Date",
@@ -361,8 +380,22 @@ with left_col:
 
         if submit_btn:
 
+            # 1. Role & Privilege Escalation Checks (Admin-Lite / Admin / Developer)
             if role == "Developer" and not is_developer:
                 st.error("⛔ Unauthorized: Only a Developer can assign the Developer role.")
+                st.stop()
+            if role in ["Admin", "Developer"] and is_admin_lite:
+                st.error("⛔ Unauthorized: Admin-Lite cannot assign Admin or Developer roles.")
+                st.stop()
+            if editing and user.get("user_id") == st.session_state.get("user_id"):
+                if role != user.get("role"):
+                    st.error("⛔ Unauthorized: You cannot alter your own administrative role.")
+                    st.stop()
+            if editing and user.get("role") in ["Admin", "Developer"] and is_admin_lite:
+                st.error("⛔ Unauthorized: Admin-Lite cannot modify Admin or Developer accounts.")
+                st.stop()
+            if editing and user.get("role") == "Developer" and not is_developer:
+                st.error("⛔ Unauthorized: Only a Developer can modify a Developer account.")
                 st.stop()
 
             email_pattern = (
@@ -370,136 +403,150 @@ with left_col:
             )
 
             if not full_name.strip():
-
                 st.error(
                     "Full Name is mandatory."
                 )
-            elif not password.strip():
-                st.error("Password is mandatory.")
-            elif not editing and (len(password) < 8 or not any(c.isalpha() for c in password) or not any(c.isdigit() for c in password)):
-                st.error("Password must contain at least 8 characters with both letters and numbers.")
+                st.stop()
 
-            elif not re.match(
+            # 2. Password validation (Issue 1: Blank password on edit keeps current password)
+            if not editing:
+                if not password.strip():
+                    st.error("Password is mandatory for new employees.")
+                    st.stop()
+                elif len(password) < 8 or not any(c.isalpha() for c in password) or not any(c.isdigit() for c in password):
+                    st.error("Password must contain at least 8 characters with both letters and numbers.")
+                    st.stop()
+            else:
+                if password.strip():
+                    if len(password.strip()) < 8 or not any(c.isalpha() for c in password.strip()) or not any(c.isdigit() for c in password.strip()):
+                        st.error("New password must contain at least 8 characters with both letters and numbers.")
+                        st.stop()
+
+            if not re.match(
                 email_pattern,
                 email
             ):
-
                 st.error(
                     "Please enter a valid email."
                 )
+                st.stop()
 
-            else:
-
-                duplicate_user = (
-                    supabase
-                    .table("users")
-                    .select(
-                        "user_id"
-                    )
-                    .eq(
-                        "email",
-                        email.strip()
-                    )
-                    .execute()
+            duplicate_user = (
+                supabase
+                .table("users")
+                .select(
+                    "user_id"
                 )
+                .eq(
+                    "email",
+                    email.strip()
+                )
+                .execute()
+            )
+
+            if editing:
+
+                duplicate_user.data = [
+
+                    row
+
+                    for row in duplicate_user.data
+
+                    if row["user_id"]
+                    != user["user_id"]
+
+                ]
+
+            if duplicate_user.data:
+
+                st.error(
+                    "User already exists with this Email."
+                )
+
+                st.stop()
+
+            try:
+
+                data = {
+
+                    "full_name":
+                        full_name.strip(),
+
+                    "email":
+                        email.strip(),
+
+                    "role":
+                        role,
+
+                    "joining_date":
+                        str(joining_date),
+
+                    "qualification":
+                        qualification,
+
+                    "experience_years":
+                        experience_years,
+
+                    "experience_months":
+                        experience_months,
+
+                    "status":
+                        status,
+
+                    "relieving_date":
+                        (
+                            str(relieving_date)
+                            if status == "Inactive"
+                            else None
+                        )
+                }
+
+                # Only include password_hash if adding user or providing a new password on edit
+                if not editing:
+                    data["password_hash"] = bcrypt.hashpw(
+                        password.strip().encode(),
+                        bcrypt.gensalt()
+                    ).decode()
+                elif password.strip():
+                    data["password_hash"] = bcrypt.hashpw(
+                        password.strip().encode(),
+                        bcrypt.gensalt()
+                    ).decode()
 
                 if editing:
 
-                    duplicate_user.data = [
-
-                        row
-
-                        for row in duplicate_user.data
-
-                        if row["user_id"]
-                        != user["user_id"]
-
-                    ]
-
-                if duplicate_user.data:
-
-                    st.error(
-                        "User already exists with this Email."
+                    (
+                        supabase
+                        .table("users")
+                        .update(data)
+                        .eq(
+                            "user_id",
+                            user["user_id"]
+                        )
+                        .execute()
                     )
 
-                    st.stop()
+                    st.session_state.user_success_msg = "User updated successfully."
+                    st.session_state.edit_user_id = None
 
-                try:
+                else:
 
-                    data = {
+                    (
+                        supabase
+                        .table("users")
+                        .insert(data)
+                        .execute()
+                    )
 
-                        "full_name":
-                            full_name,
+                    st.session_state.user_success_msg = "User added successfully."
 
-                        "email":
-                            email,
-                        
-                        "password_hash":
-                            bcrypt.hashpw(
-                                password.encode(),
-                                bcrypt.gensalt()
-                            ).decode(),
+                get_all_users.clear()
+                get_master_lookups.clear()
+                st.rerun()
 
-                        "role":
-                            role,
+            except Exception as e:
 
-                        "joining_date":
-                            str(joining_date),
-
-                        "qualification":
-                            qualification,
-
-                        "experience_years":
-                            experience_years,
-
-                        "experience_months":
-                            experience_months,
-
-                        "status":
-                            status,
-
-                        "relieving_date":
-                            (
-                                str(relieving_date)
-                                if status == "Inactive"
-                                else None
-                            )
-                    }
-
-                    if editing:
-
-                        (
-                            supabase
-                            .table("users")
-                            .update(data)
-                            .eq(
-                                "user_id",
-                                user["user_id"]
-                            )
-                            .execute()
-                        )
-
-                        st.session_state.user_success_msg = "User updated successfully."
-                        st.session_state.edit_user_id = None
-
-                    else:
-
-                        (
-                            supabase
-                            .table("users")
-                            .insert(data)
-                            .execute()
-                        )
-
-                        st.session_state.user_success_msg = "User added successfully."
-
-                    get_all_users.clear()
-                    get_master_lookups.clear()
-                    st.rerun()
-
-                except Exception as e:
-
-                    st.error(str(e))
+                st.error(str(e))
     
     if editing:
         if st.button("❌ Cancel Edit", use_container_width=True):
@@ -581,25 +628,36 @@ with right_col:
                     )
 
                 is_row_dev = row.get("role") == "Developer"
+                is_row_admin = row.get("role") == "Admin"
+
+                if is_developer:
+                    can_manage_row = True
+                    lock_reason = ""
+                elif is_admin:
+                    can_manage_row = not is_row_dev
+                    lock_reason = "Only a Developer can manage Developer accounts"
+                else:  # Admin-Lite
+                    can_manage_row = (not is_row_dev) and (not is_row_admin)
+                    lock_reason = "Admin-Lite cannot manage Admin or Developer accounts"
 
                 # Edit Button
-                if is_developer or not is_row_dev:
+                if can_manage_row:
                     if cols[5].button("✏️", key=f"edit_{row['user_id']}", help="Edit User"):
                         st.session_state.edit_user_id = row["user_id"]
                         st.rerun(scope="app")
                 else:
-                    cols[5].markdown("<div title='Only a Developer can edit Developer accounts' style='margin-top:2px; font-size:16px; cursor:help;'>🔒</div>", unsafe_allow_html=True)
+                    cols[5].markdown(f"<div title='{lock_reason}' style='margin-top:2px; font-size:16px; cursor:help;'>🔒</div>", unsafe_allow_html=True)
 
                 # Reset Password
-                if is_developer or not is_row_dev:
+                if can_manage_row:
                     if cols[6].button("🔑", key=f"reset_{row['user_id']}", help="Reset Password"):
                         st.session_state.reset_user_id = row["user_id"]
                         st.rerun(scope="app")
                 else:
-                    cols[6].markdown("<div title='Only a Developer can reset Developer passwords' style='margin-top:2px; font-size:16px; cursor:help;'>🔒</div>", unsafe_allow_html=True)
+                    cols[6].markdown(f"<div title='{lock_reason}' style='margin-top:2px; font-size:16px; cursor:help;'>🔒</div>", unsafe_allow_html=True)
 
                 # Active / Inactive User
-                if is_developer or not is_row_dev:
+                if can_manage_row:
                     if row["status"] == "Active":
                         if cols[7].button("🔒", key=f"deactivate_{row['user_id']}", help="Deactivate User"):
                             (
@@ -633,7 +691,7 @@ with right_col:
                             get_master_lookups.clear()
                             st.rerun(scope="app")
                 else:
-                    cols[7].markdown("<div title='Developer accounts cannot be deactivated by Admins' style='margin-top:2px; font-size:16px; cursor:help;'>🔒</div>", unsafe_allow_html=True)
+                    cols[7].markdown(f"<div title='{lock_reason}' style='margin-top:2px; font-size:16px; cursor:help;'>🔒</div>", unsafe_allow_html=True)
 
             render_paginated_section(
                 df,

@@ -1,10 +1,16 @@
 import os
 import re
+import time
 import base64
 import logging
+from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor
 import streamlit as st
 from db import supabase
+try:
+    from db import supabase_admin
+except (ImportError, AttributeError):
+    supabase_admin = supabase
 
 logger = logging.getLogger("ats.notifications")
 
@@ -71,6 +77,105 @@ def show_logout():
     if st.button("🔄 Refresh Page", use_container_width=True, help="Clear cache and reload the latest data from database"):
         clear_data_cache(None)
         st.rerun()
+
+def check_login_lockout(email: str) -> tuple[bool, int]:
+    """Checks account-scoped server-side lockout (login_attempts table) and session-scoped fallback."""
+    clean_email = email.strip().lower()
+    now_ts = time.time()
+    if st.session_state.get("login_lockout_until", 0.0) > now_ts:
+        return True, int(st.session_state.login_lockout_until - now_ts)
+
+    if not clean_email:
+        return False, 0
+
+    try:
+        res = supabase_admin.table("login_attempts").select("failed_count, locked_until").eq("email", clean_email).execute()
+        if res.data:
+            rec = res.data[0]
+            locked_until_str = rec.get("locked_until")
+            if locked_until_str:
+                clean_dt_str = str(locked_until_str).replace("Z", "+00:00")
+                lock_dt = datetime.fromisoformat(clean_dt_str)
+                now_dt = datetime.now(timezone.utc)
+                if lock_dt > now_dt:
+                    rem = int((lock_dt - now_dt).total_seconds())
+                    return True, rem
+    except Exception:
+        pass
+
+    return False, 0
+
+
+def record_login_result(email: str, success: bool) -> tuple[bool, int, int]:
+    """
+    Updates failed_count & locked_until server-side atomically via Postgres RPC (record_login_failure).
+    Eliminates race conditions under parallel bot brute-force attacks.
+    Falls back gracefully to client-level upsert if the RPC is not yet created.
+    """
+    clean_email = email.strip().lower()
+    if not clean_email:
+        return False, 0, 0
+
+    if success:
+        st.session_state.login_failed_attempts = 0
+        st.session_state.login_lockout_until = 0.0
+        try:
+            supabase_admin.rpc("clear_login_attempts", {"target_email": clean_email}).execute()
+        except Exception:
+            try:
+                supabase_admin.table("login_attempts").delete().eq("email", clean_email).execute()
+            except Exception:
+                pass
+        return False, 0, 0
+
+    # 1. Primary: Atomic server-side increment & lockout via Postgres RPC
+    try:
+        rpc_res = supabase_admin.rpc("record_login_failure", {"target_email": clean_email}).execute()
+        if rpc_res.data:
+            row = rpc_res.data[0] if isinstance(rpc_res.data, list) else rpc_res.data
+            server_failed = row.get("failed_count", 1)
+            is_locked = bool(row.get("is_locked", False))
+            rem_sec = int(row.get("remaining_seconds", 0))
+
+            st.session_state.login_failed_attempts = server_failed
+            if is_locked:
+                st.session_state.login_lockout_until = time.time() + rem_sec
+            return is_locked, rem_sec, server_failed
+    except Exception:
+        pass
+
+    # 2. Resilient Fallback: Standard upsert if RPC is not yet deployed
+    now_dt = datetime.now(timezone.utc)
+    st.session_state.login_failed_attempts = st.session_state.get("login_failed_attempts", 0) + 1
+    new_failed = st.session_state.login_failed_attempts
+    locked_until_iso = None
+    is_locked = False
+    rem_sec = 0
+
+    try:
+        res = supabase_admin.table("login_attempts").select("failed_count, locked_until").eq("email", clean_email).execute()
+        server_count = (res.data[0].get("failed_count", 0) if res.data else 0) + 1
+        new_failed = max(server_count, new_failed)
+
+        if new_failed >= 5:
+            lock_until_dt = now_dt + timedelta(seconds=180)
+            locked_until_iso = lock_until_dt.isoformat()
+            is_locked = True
+            rem_sec = 180
+            st.session_state.login_lockout_until = time.time() + 180
+
+        supabase_admin.table("login_attempts").upsert({
+            "email": clean_email,
+            "failed_count": new_failed,
+            "locked_until": locked_until_iso
+        }).execute()
+    except Exception:
+        if new_failed >= 5:
+            st.session_state.login_lockout_until = time.time() + 180
+            is_locked = True
+            rem_sec = 180
+
+    return is_locked, rem_sec, new_failed
 
 @st.cache_data(ttl=120)
 def get_master_lookups():

@@ -310,26 +310,54 @@ def map_candidate_to_job(candidate_entry, job_id):
 
 @st.dialog("🚫 Deactivate Candidate Profile")
 def deactivate_candidate_dialog(cand_id, full_name, is_legacy=False, legacy_id=None, raw_cand_data=None):
+    user_role = st.session_state.get("user_role", "Recruiter")
+    is_admin_user = user_role in ["Admin", "Developer"]
+
     st.markdown(f"**Candidate:** `{full_name}`")
     st.caption("Deactivating a candidate automatically excludes them from active job matches, searches, and leaderboards.")
-    d_reason = st.selectbox("Deactivation Reason", ["Retired", "Deceased", "Inactive / Left Market", "Blacklisted"], key=f"dlg_deact_r_{cand_id}")
-    d_note = st.text_input("Remarks / Context", placeholder="e.g. Retired in 2026 / Left Industry...", key=f"dlg_deact_n_{cand_id}")
+    
+    # Restrict "Blacklisted" option to Admins & Developers only
+    reasons = ["Retired", "Deceased", "Inactive / Left Market"]
+    if is_admin_user:
+        reasons.append("Blacklisted")
+    else:
+        st.info("ℹ️ Standard recruiters can mark candidates as Inactive/Retired/Deceased. Blacklisting requires Administrator authorization.")
+
+    d_reason = st.selectbox("Deactivation Reason", reasons, key=f"dlg_deact_r_{cand_id}")
+    d_note = st.text_input("Remarks / Context *", placeholder="e.g. Detailed reason / justification for deactivation...", key=f"dlg_deact_n_{cand_id}")
     
     col1, col2 = st.columns(2)
     with col1:
         if st.button("Confirm Deactivate", type="primary", use_container_width=True, key=f"btn_dlg_deact_{cand_id}"):
-            audit_str = f"\n[DEACTIVATED: {d_reason} on {datetime.now().strftime('%Y-%m-%d %H:%M')} by {st.session_state.get('full_name', 'Recruiter')}]: {d_note}"
+            if d_reason == "Blacklisted" and not is_admin_user:
+                st.error("⛔ Unauthorized: Only Administrators can blacklist candidates.")
+                st.stop()
+            if not d_note.strip():
+                st.error("Please provide remarks / context for deactivating this candidate.")
+                st.stop()
+
+            actor_name = st.session_state.get("user_name") or st.session_state.get("full_name") or "User"
+            actor_role = st.session_state.get("user_role") or "Recruiter"
+            timestamp_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+            audit_str = f"\n[DEACTIVATED: {d_reason} on {timestamp_str} by {actor_name} ({actor_role})]: {d_note.strip()}"
+
             if is_legacy:
                 leg_id = int(str(legacy_id or cand_id).replace("LEG_", ""))
                 supabase.table("legacy_candidates").update({
-                    "notice_negotiable": f"Deactivated: {d_reason}"
+                    "notice_negotiable": f"Deactivated: {d_reason} | {audit_str.strip()}"
                 }).eq("legacy_candidate_id", leg_id).execute()
             else:
-                existing_remarks = (raw_cand_data.get("remarks") if raw_cand_data else "") or ""
+                try:
+                    res_rem = supabase.table("candidate_management").select("remarks").eq("candidate_id", cand_id).single().execute()
+                    existing_remarks = (res_rem.data.get("remarks") if res_rem.data else "") or ""
+                except Exception:
+                    existing_remarks = (raw_cand_data.get("remarks") if raw_cand_data else "") or ""
+
+                new_remarks = (existing_remarks + audit_str).strip()
                 supabase.table("candidate_management").update({
                     "candidate_status": d_reason,
                     "current_stage": d_reason,
-                    "remarks": (existing_remarks + audit_str).strip()
+                    "remarks": new_remarks
                 }).eq("candidate_id", cand_id).execute()
             st.toast(f"Candidate {full_name} marked as {d_reason}!", icon="🚫")
             clear_data_cache("candidates")
@@ -340,26 +368,61 @@ def deactivate_candidate_dialog(cand_id, full_name, is_legacy=False, legacy_id=N
 
 @st.dialog("🟢 Reactivate Candidate Profile")
 def reactivate_candidate_dialog(cand_id, full_name, is_legacy=False, legacy_id=None, raw_cand_data=None):
+    user_role = st.session_state.get("user_role", "Recruiter")
+    is_admin_user = user_role in ["Admin", "Developer"]
+
+    # Check if candidate is currently Blacklisted
+    current_cand_status = ""
+    if raw_cand_data:
+        current_cand_status = str(raw_cand_data.get("candidate_status") or raw_cand_data.get("status") or "")
+    if not current_cand_status and not is_legacy:
+        try:
+            res_st = supabase.table("candidate_management").select("candidate_status").eq("candidate_id", cand_id).single().execute()
+            if res_st.data:
+                current_cand_status = res_st.data.get("candidate_status", "")
+        except Exception:
+            pass
+
+    if current_cand_status == "Blacklisted" and not is_admin_user:
+        st.error("⛔ Unauthorized: This candidate is Blacklisted. Only an Administrator can restore or reactivate them.")
+        if st.button("Close", use_container_width=True, key=f"btn_job_close_{cand_id}"):
+            st.rerun()
+        st.stop()
+
     st.markdown(f"**Candidate:** `{full_name}`")
     st.caption("Restore candidate back to active matching & hiring pipeline.")
     r_stage = st.selectbox("Restore Stage", ["Screening", "Shortlisted", "Applied", "New"], key=f"dlg_react_s_{cand_id}")
-    r_note = st.text_input("Reactivation Note", placeholder="e.g. Mistakenly deactivated / Back in market...", key=f"dlg_react_n_{cand_id}")
+    r_note = st.text_input("Reactivation Note *", placeholder="e.g. Reason for reactivation / restoration...", key=f"dlg_react_n_{cand_id}")
     
     col1, col2 = st.columns(2)
     with col1:
         if st.button("Confirm Reactivation", type="primary", use_container_width=True, key=f"btn_dlg_react_{cand_id}"):
-            audit_str = f"\n[REACTIVATED: Restored to {r_stage} on {datetime.now().strftime('%Y-%m-%d %H:%M')} by {st.session_state.get('full_name', 'Recruiter')}]: {r_note}"
+            if not r_note.strip():
+                st.error("Please provide a reactivation note.")
+                st.stop()
+
+            actor_name = st.session_state.get("user_name") or st.session_state.get("full_name") or "User"
+            actor_role = st.session_state.get("user_role") or "Recruiter"
+            timestamp_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+            audit_str = f"\n[REACTIVATED: Restored to {r_stage} on {timestamp_str} by {actor_name} ({actor_role})]: {r_note.strip()}"
+
             if is_legacy:
                 leg_id = int(str(legacy_id or cand_id).replace("LEG_", ""))
                 supabase.table("legacy_candidates").update({
-                    "notice_negotiable": "No"
+                    "notice_negotiable": f"No | {audit_str.strip()}"
                 }).eq("legacy_candidate_id", leg_id).execute()
             else:
-                existing_remarks = (raw_cand_data.get("remarks") if raw_cand_data else "") or ""
+                try:
+                    res_rem = supabase.table("candidate_management").select("remarks").eq("candidate_id", cand_id).single().execute()
+                    existing_remarks = (res_rem.data.get("remarks") if res_rem.data else "") or ""
+                except Exception:
+                    existing_remarks = (raw_cand_data.get("remarks") if raw_cand_data else "") or ""
+
+                new_remarks = (existing_remarks + audit_str).strip()
                 supabase.table("candidate_management").update({
                     "candidate_status": r_stage,
                     "current_stage": r_stage,
-                    "remarks": (existing_remarks + audit_str).strip()
+                    "remarks": new_remarks
                 }).eq("candidate_id", cand_id).execute()
             st.toast(f"Candidate {full_name} reactivated to {r_stage}!", icon="🟢")
             clear_data_cache("candidates")
@@ -1437,9 +1500,14 @@ with right_col:
                         is_cand_deact = cand_raw_status in ["Retired", "Deceased", "Inactive / Left Market", "Blacklisted"]
 
                         with btn_col3:
+                            is_admin_or_dev = str(st.session_state.get("user_role", "")).lower() in ["admin", "developer"]
                             if is_cand_deact:
-                                if st.button("🟢 Reactivate", key=f"job_btn_react_{c['candidate_id']}", use_container_width=True, help="Reactivate Candidate Profile"):
-                                    reactivate_candidate_dialog(c["candidate_id"], full_name, is_legacy=is_legacy_cand, legacy_id=c.get("legacy_candidate_id"), raw_cand_data=c)
+                                is_blacklisted = cand_raw_status == "Blacklisted"
+                                if is_blacklisted and not is_admin_or_dev:
+                                    st.markdown("<div title='Blacklisted profile: Only Administrators can reactivate' style='font-size:13px; opacity:0.8; text-align:center; padding-top:6px;'>🔒 Blacklisted</div>", unsafe_allow_html=True)
+                                else:
+                                    if st.button("🟢 Reactivate", key=f"job_btn_react_{c['candidate_id']}", use_container_width=True, help="Reactivate Candidate Profile"):
+                                        reactivate_candidate_dialog(c["candidate_id"], full_name, is_legacy=is_legacy_cand, legacy_id=c.get("legacy_candidate_id"), raw_cand_data=c)
                             else:
                                 if st.button("🚫 Deactivate", key=f"job_btn_deact_{c['candidate_id']}", use_container_width=True, help="Deactivate or Archive Profile"):
                                     deactivate_candidate_dialog(c["candidate_id"], full_name, is_legacy=is_legacy_cand, legacy_id=c.get("legacy_candidate_id"), raw_cand_data=c)

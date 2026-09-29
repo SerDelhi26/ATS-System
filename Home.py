@@ -10,7 +10,7 @@ try:
 except (ImportError, AttributeError):
     supabase_admin = supabase
 from theme import apply_theme
-from common import render_logo
+from common import render_logo, check_login_lockout, record_login_result
 
 # ==========================
 # PAGE CONFIG
@@ -40,6 +40,8 @@ if "user_id" not in st.session_state:
     st.session_state.user_id = None
 if "user_name" not in st.session_state:
     st.session_state.user_name = None
+if "full_name" not in st.session_state:
+    st.session_state.full_name = None
 if "user_role" not in st.session_state:
     st.session_state.user_role = None
 if "password_reset_mode" not in st.session_state:
@@ -50,108 +52,6 @@ if "login_lockout_until" not in st.session_state:
     st.session_state.login_lockout_until = 0.0
 if "last_activity" not in st.session_state:
     st.session_state.last_activity = time.time()
-
-
-def check_login_lockout(email: str) -> tuple[bool, int]:
-    """Checks account-scoped server-side lockout (login_attempts table) and session-scoped fallback."""
-    clean_email = email.strip().lower()
-    now_ts = time.time()
-    if st.session_state.get("login_lockout_until", 0.0) > now_ts:
-        return True, int(st.session_state.login_lockout_until - now_ts)
-
-    if not clean_email:
-        return False, 0
-
-    try:
-        res = supabase_admin.table("login_attempts").select("failed_count, locked_until").eq("email", clean_email).execute()
-        if res.data:
-            rec = res.data[0]
-            locked_until_str = rec.get("locked_until")
-            if locked_until_str:
-                from datetime import datetime, timezone
-                clean_dt_str = str(locked_until_str).replace("Z", "+00:00")
-                lock_dt = datetime.fromisoformat(clean_dt_str)
-                now_dt = datetime.now(timezone.utc)
-                if lock_dt > now_dt:
-                    rem = int((lock_dt - now_dt).total_seconds())
-                    return True, rem
-    except Exception:
-        pass
-
-    return False, 0
-
-
-def record_login_result(email: str, success: bool) -> tuple[bool, int, int]:
-    """
-    Updates failed_count & locked_until server-side atomically via Postgres RPC (record_login_failure).
-    Eliminates race conditions under parallel bot brute-force attacks.
-    Falls back gracefully to client-level upsert if the RPC is not yet created.
-    """
-    clean_email = email.strip().lower()
-    if not clean_email:
-        return False, 0, 0
-
-    if success:
-        st.session_state.login_failed_attempts = 0
-        st.session_state.login_lockout_until = 0.0
-        try:
-            supabase_admin.rpc("clear_login_attempts", {"target_email": clean_email}).execute()
-        except Exception:
-            try:
-                supabase_admin.table("login_attempts").delete().eq("email", clean_email).execute()
-            except Exception:
-                pass
-        return False, 0, 0
-
-    # 1. Primary: Atomic server-side increment & lockout via Postgres RPC
-    try:
-        rpc_res = supabase_admin.rpc("record_login_failure", {"target_email": clean_email}).execute()
-        if rpc_res.data:
-            row = rpc_res.data[0] if isinstance(rpc_res.data, list) else rpc_res.data
-            server_failed = row.get("failed_count", 1)
-            is_locked = bool(row.get("is_locked", False))
-            rem_sec = int(row.get("remaining_seconds", 0))
-
-            st.session_state.login_failed_attempts = server_failed
-            if is_locked:
-                st.session_state.login_lockout_until = time.time() + rem_sec
-            return is_locked, rem_sec, server_failed
-    except Exception:
-        pass
-
-    # 2. Resilient Fallback: Standard upsert if RPC is not yet deployed
-    from datetime import datetime, timezone, timedelta
-    now_dt = datetime.now(timezone.utc)
-    st.session_state.login_failed_attempts = st.session_state.get("login_failed_attempts", 0) + 1
-    new_failed = st.session_state.login_failed_attempts
-    locked_until_iso = None
-    is_locked = False
-    rem_sec = 0
-
-    try:
-        res = supabase_admin.table("login_attempts").select("failed_count, locked_until").eq("email", clean_email).execute()
-        server_count = (res.data[0].get("failed_count", 0) if res.data else 0) + 1
-        new_failed = max(server_count, new_failed)
-
-        if new_failed >= 5:
-            lock_until_dt = now_dt + timedelta(seconds=180)
-            locked_until_iso = lock_until_dt.isoformat()
-            is_locked = True
-            rem_sec = 180
-            st.session_state.login_lockout_until = time.time() + 180
-
-        supabase_admin.table("login_attempts").upsert({
-            "email": clean_email,
-            "failed_count": new_failed,
-            "locked_until": locked_until_iso
-        }).execute()
-    except Exception:
-        if new_failed >= 5:
-            st.session_state.login_lockout_until = time.time() + 180
-            is_locked = True
-            rem_sec = 180
-
-    return is_locked, rem_sec, new_failed
 
 
 # ==========================
@@ -165,6 +65,13 @@ def login_view():
         st.markdown("# 🔑 Change Password")
         st.info("Enter your current password and choose a new password.")
         
+        # Check for active session-level brute-force lockout
+        now = time.time()
+        if st.session_state.get("login_lockout_until", 0.0) > now:
+            remaining_sec = int(st.session_state.login_lockout_until - now)
+            st.error(f"🔒 Account temporarily locked due to consecutive failed attempts. Please wait {remaining_sec} seconds before trying again.")
+            st.stop()
+
         def on_reset_enter():
             st.session_state.reset_triggered = True
 
@@ -183,7 +90,8 @@ def login_view():
             
         do_change = submit_change or st.session_state.pop("reset_triggered", False)
         if do_change:
-            if not email.strip() or not current_password.strip() or not new_password.strip():
+            clean_email = email.strip().lower()
+            if not clean_email or not current_password.strip() or not new_password.strip():
                 st.error("All fields are required.")
             elif new_password != confirm_password:
                 st.error("Passwords do not match.")
@@ -192,23 +100,40 @@ def login_view():
             elif not any(c.isalpha() for c in new_password) or not any(c.isdigit() for c in new_password):
                 st.error("Password must contain at least one letter and one number.")
             else:
+                # Check account lockout before verifying credentials
+                is_locked, rem_sec = check_login_lockout(clean_email)
+                if is_locked:
+                    st.error(f"⏳ Account temporarily locked due to 5 consecutive failed attempts. Please wait {rem_sec} seconds before trying again.")
+                    st.stop()
+
                 try:
                     response = (
                         supabase_admin
                         .table("users")
                         .select("user_id, password_hash, status")
-                        .eq("email", email.strip())
+                        .eq("email", clean_email)
                         .eq("status", "Active")
                         .execute()
                     )
                     
                     if not response.data:
-                        st.error("Invalid email, password, or account is inactive.")
+                        is_locked, rem_sec, failed_cnt = record_login_result(clean_email, success=False)
+                        if is_locked:
+                            st.error("🚨 5 consecutive failed attempts. Account temporarily locked for 3 minutes.")
+                        else:
+                            remaining = max(1, 5 - failed_cnt)
+                            st.error(f"Invalid email or current password. ({remaining} attempts remaining before 3-minute lockout)")
                     else:
                         user = response.data[0]
                         if not bcrypt.checkpw(current_password.encode(), user["password_hash"].encode()):
-                            st.error("Invalid email, password, or account is inactive.")
+                            is_locked, rem_sec, failed_cnt = record_login_result(clean_email, success=False)
+                            if is_locked:
+                                st.error("🚨 5 consecutive failed attempts. Account temporarily locked for 3 minutes.")
+                            else:
+                                remaining = max(1, 5 - failed_cnt)
+                                st.error(f"Invalid email or current password. ({remaining} attempts remaining before 3-minute lockout)")
                         else:
+                            record_login_result(clean_email, success=True)
                             hashed_password = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
                             supabase_admin.table("users").update({"password_hash": hashed_password}).eq("user_id", user["user_id"]).execute()
                             st.success("Password changed successfully. Please log in.")
@@ -286,6 +211,7 @@ def login_view():
                         st.session_state.logged_in = True
                         st.session_state.user_id = user["user_id"]
                         st.session_state.user_name = user["full_name"]
+                        st.session_state.full_name = user["full_name"]
                         st.session_state.user_role = user["role"]
                         st.session_state.last_activity = time.time()
                         st.success(f"Welcome back, {user['full_name']}!")

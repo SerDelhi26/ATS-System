@@ -5,7 +5,7 @@ try:
 except (ImportError, AttributeError):
     from db import supabase as supabase_admin
 from theme import apply_theme
-from common import show_logout, show_job_notifications, show_user_profile
+from common import show_logout, show_job_notifications, show_user_profile, check_login_lockout, record_login_result
 
 # ==========================
 # LOGIN CHECK
@@ -49,6 +49,14 @@ if user_id:
     except Exception:
         pass
 
+clean_email = user_email.strip().lower()
+
+# Check for active account-level or session-level lockout
+is_locked, rem_sec = check_login_lockout(clean_email)
+if is_locked:
+    st.error(f"🔒 Account temporarily locked due to consecutive failed attempts. Please wait {rem_sec} seconds before trying again.")
+    st.stop()
+
 st.text_input("Account Email", value=user_email, disabled=True, help="Password changes apply strictly to your active logged-in account.")
 current_password = st.text_input("Current Password", type="password")
 new_password = st.text_input("New Password", type="password")
@@ -71,6 +79,12 @@ if change_password:
     elif not any(c.isalpha() for c in new_password) or not any(c.isdigit() for c in new_password):
         st.error("Password must contain at least one letter and one number.")
     else:
+        # Re-verify lockout status before checking password
+        is_locked, rem_sec = check_login_lockout(clean_email)
+        if is_locked:
+            st.error(f"⏳ Account temporarily locked due to consecutive failed attempts. Please wait {rem_sec} seconds before trying again.")
+            st.stop()
+
         response = (
             supabase_admin
             .table("users")
@@ -86,8 +100,14 @@ if change_password:
             user = response.data[0]
 
             if not bcrypt.checkpw(current_password.encode(), user["password_hash"].encode()):
-                st.error("Current password is incorrect.")
+                is_locked, rem_sec, failed_cnt = record_login_result(clean_email, success=False)
+                if is_locked:
+                    st.error("🚨 5 consecutive failed attempts. Account temporarily locked for 3 minutes.")
+                else:
+                    remaining = max(1, 5 - failed_cnt)
+                    st.error(f"Current password is incorrect. ({remaining} attempts remaining before 3-minute lockout)")
             else:
+                record_login_result(clean_email, success=True)
                 hashed_password = (
                     bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
                 )
