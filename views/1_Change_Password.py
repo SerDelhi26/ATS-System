@@ -4,8 +4,36 @@ try:
     from db import supabase_admin
 except (ImportError, AttributeError):
     from db import supabase as supabase_admin
+import time
 from theme import apply_theme
-from common import show_logout, show_job_notifications, show_user_profile, check_login_lockout, record_login_result
+from common import show_logout, show_job_notifications, show_user_profile
+try:
+    from common import check_login_lockout, record_login_result
+except (ImportError, AttributeError):
+    import importlib
+    import common
+    try:
+        importlib.reload(common)
+        from common import check_login_lockout, record_login_result
+    except (ImportError, AttributeError):
+        def check_login_lockout(email: str):
+            clean_email = email.strip().lower()
+            now_ts = time.time()
+            if st.session_state.get("login_lockout_until", 0.0) > now_ts:
+                return True, int(st.session_state.login_lockout_until - now_ts)
+            return False, 0
+
+        def record_login_result(email: str, success: bool):
+            if success:
+                st.session_state.login_failed_attempts = 0
+                st.session_state.login_lockout_until = 0.0
+                return False, 0, 0
+            st.session_state.login_failed_attempts = st.session_state.get("login_failed_attempts", 0) + 1
+            new_failed = st.session_state.login_failed_attempts
+            if new_failed >= 5:
+                st.session_state.login_lockout_until = time.time() + 180
+                return True, 180, new_failed
+            return False, 0, new_failed
 
 # ==========================
 # LOGIN CHECK
