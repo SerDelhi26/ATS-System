@@ -1,8 +1,9 @@
-streamlit
+streamlit>=1.37.0
 supabase>=2.10.0
 python-dotenv>=1.0.0
 bcrypt>=4.0.0
 pandas>=2.2.0,<3.0.0
+numpy>=1.26.0
 openpyxl>=3.1.0
 requests>=2.31.0
 plotly>=5.18.0
