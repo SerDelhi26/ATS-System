@@ -30,10 +30,12 @@ def authenticate_user(email, password):
             user["password_hash"].encode()
         ):
 
+            import time
             st.session_state.logged_in = True
             st.session_state.user_id = user["user_id"]
             st.session_state.user_name = user["full_name"]
             st.session_state.user_role = user["role"]
+            st.session_state.last_activity = time.time()
 
             return True
 

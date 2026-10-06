@@ -47,14 +47,14 @@ def render_logo(width=220, align="left"):
 
 def show_user_profile():
     """Displays company logo and the logged-in user's name and role at the top of the sidebar."""
-    # Check 30-minute idle session timeout
+    # Check 60-minute idle session timeout
     if st.session_state.get("logged_in", False):
         import time
         now = time.time()
         last_act = st.session_state.get("last_activity", now)
-        if now - last_act > 30 * 60:
+        if now - last_act > 60 * 60:
             st.session_state.clear()
-            st.session_state["session_timeout_msg"] = "🔒 Session expired due to 30 minutes of inactivity. Please log in again."
+            st.session_state["session_timeout_msg"] = "🔒 Session expired due to 60 minutes of inactivity. Please log in again."
             st.rerun()
         st.session_state["last_activity"] = now
 

@@ -22,14 +22,14 @@ st.set_page_config(
 
 apply_theme()
 
-# Check Session Inactivity Timeout (30 minutes)
-IDLE_TIMEOUT_SECONDS = 30 * 60
+# Check Session Inactivity Timeout (60 minutes)
+IDLE_TIMEOUT_SECONDS = 60 * 60
 if st.session_state.get("logged_in", False):
     now = time.time()
     last_act = st.session_state.get("last_activity", now)
     if now - last_act > IDLE_TIMEOUT_SECONDS:
         st.session_state.clear()
-        st.session_state["session_timeout_msg"] = "🔒 Session expired due to 30 minutes of inactivity. Please log in again."
+        st.session_state["session_timeout_msg"] = "🔒 Session expired due to 60 minutes of inactivity. Please log in again."
         st.rerun()
     st.session_state["last_activity"] = now
 
